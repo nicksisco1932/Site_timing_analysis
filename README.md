@@ -30,9 +30,12 @@ the source of truth should be the Python pipeline under `src/`.
 |   |-- sanity.py
 |   |-- sanity_states_by_pt.py
 |   `-- legacy prototype scripts
+|-- tests/
+|   `-- test_test_data_pipeline.py
 |-- test_data/
 |   `-- local.db
 |-- requirements.txt
+|-- requirements-dev.txt
 |-- pyproject.toml
 |-- tulsa_*.py
 `-- *.bat
@@ -53,6 +56,9 @@ the source of truth should be the Python pipeline under `src/`.
 - `testing/`
   Smoke checks, diagnostics, and older prototype utilities.
 
+- `tests/`
+  Pytest regression coverage for the current Python pipeline.
+
 - `test_data/`
   Local test fixtures. `test_data/local.db` is the current real-case smoke-test
   database.
@@ -71,6 +77,12 @@ Optional editable install for the `src/` package:
 .\.venv\Scripts\python.exe -m pip install -e .
 ```
 
+Install dev dependencies:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
 ## Main Workflow
 
 Run the full site pipeline:
@@ -87,6 +99,12 @@ Run the real-case smoke test against `test_data/local.db`:
 
 ```powershell
 .\.venv\Scripts\python.exe testing\smoke_test_test_data.py
+```
+
+Run the regression tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 That smoke test currently validates:
@@ -122,4 +140,6 @@ That smoke test currently validates:
 - The Python pipeline is organized around Gantt-ready workflow reconstruction.
 - Some legacy sites may still require extra enrichment beyond `AuditLogRecords`
   and `Sessions`, such as timing-sheet-derived boundaries.
+- The legacy R reference now lives under `Legacy/r_reference/`, with a working
+  checklist in `Legacy/PARITY_CHECKLIST.md`.
 - `test_output/` is ignored and intended for generated smoke-test artifacts.
