@@ -1,117 +1,125 @@
-## TULSA Timing Analysis Pipeline
+# Site Timing Analysis
 
-Unified Python Pipeline for AuditLog Processing, Workflow State Mapping, and Timing Visualization
+Python pipeline for reconstructing TULSA workflow timelines from `local.db`
+audit logs and producing legacy-style timing summaries and Gantt plots.
 
-Overview
+The target is the legacy end product, not the legacy implementation:
+the source of truth should be the Python pipeline under `src/`.
 
-This repository contains the production-grade pipeline for extracting, reconstructing, and analyzing TULSA workflow timing from system AuditLogRecords.
-The design emphasizes clarity, reproducibility, and modularity. All development and exploratory scripts are isolated under /testing for cleanliness.
+## Layout
 
-The canonical workflow:
+```text
+.
+|-- src/
+|   `-- site_timing_analysis/
+|       |-- tulsa_collect_auditlogs.py
+|       |-- tulsa_state_machine.py
+|       |-- tulsa_build_timing_summary.py
+|       |-- tulsa_plot_timing.py
+|       |-- tulsa_gantt_plots.py
+|       |-- tulsa_trend_analysis.py
+|       |-- tulsa_time_sanity.py
+|       |-- tulsa_time_cutoff.py
+|       |-- tulsa_day_simulation.py
+|       |-- tulsa_timebase.py
+|       `-- tulsa_workflow.py
+|-- Legacy/
+|   `-- ReadAuditLogs.R
+|-- testing/
+|   |-- smoke_test_test_data.py
+|   |-- sanity.py
+|   |-- sanity_states_by_pt.py
+|   `-- legacy prototype scripts
+|-- test_data/
+|   `-- local.db
+|-- requirements.txt
+|-- pyproject.toml
+|-- tulsa_*.py
+`-- *.bat
+```
 
-Collect audit logs
-tulsa_collect_auditlogs.py builds a single auditlogs_<site>.csv from local.db records.
+## What Lives Where
 
-Map workflow states
-tulsa_state_machine.py converts raw logs into state-segmented rows with durations.
+- `src/site_timing_analysis/`
+  Actual implementation code.
 
-Build timing summary
-tulsa_build_timing_summary.py constructs unified patient-level timing tables, including intra-MRI totals and ProcedureTotal.
+- `tulsa_*.py` in the repo root
+  Thin compatibility entrypoints. Existing commands and batch files still work,
+  but the real code lives under `src/`.
 
-Visualization and QA
+- `Legacy/`
+  Reference-only R code. Keep for comparison and historical behavior checks.
 
-tulsa_plot_timing.py for stacked bar charts, distributions, and Gantt collection
+- `testing/`
+  Smoke checks, diagnostics, and older prototype utilities.
 
-tulsa_box_jitter.py for per-phase box-jitter plots
+- `test_data/`
+  Local test fixtures. `test_data/local.db` is the current real-case smoke-test
+  database.
 
-tulsa_trend_analysis.py for trends, variability, outliers, and JSON summaries
+## Install
 
-tulsa_gantt_plots.py for specialized Gantt layouts
+Use the repository virtual environment or install into your own environment:
 
-Unified driver
-tulsa_site_pipeline.py orchestrates the full pipeline end-to-end for a single site.
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
-Directory Structure
-/
-├── tulsa_collect_auditlogs.py
-├── tulsa_state_machine.py
-├── tulsa_build_timing_summary.py
-├── tulsa_plot_timing.py
-├── tulsa_box_jitter.py
-├── tulsa_trend_analysis.py
-├── tulsa_gantt_plots.py
-├── tulsa_site_pipeline.py
-│
-├── testing/
-│   ├── tulsa_case_summary.py
-│   ├── tulsa_timing.py
-│   ├── tulsa_probe_localdb.py
-│   ├── sanity.py
-│   ├── sanity_states_by_pt.py
-│   ├── run_me.bat
-│   ├── run_site_analysis.bat
-│   └── run_Stanford_064.bat
-│
-└── README.md
+Optional editable install for the `src/` package:
 
-Standard Output Structure
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e .
+```
 
-Each run produces:
+## Main Workflow
 
-<AnalysisRoot>/<DATE>_<SITE_LABEL>/
-    auditlogs_<site>.csv
-    auditlogs_<site>_states.csv
-    timing_summary_<site>.csv
-    /plots/
-        gantt_*.png
-        stacked_*.png
-        distributions_*.png
-        jitter_*.png
-    /stats/
-        metrics.json
-        outliers.csv
-        trends.csv
+Run the full site pipeline:
 
-Running the Unified Pipeline
+```powershell
+.\.venv\Scripts\python.exe tulsa_site_pipeline.py `
+  --site Stanford_064 `
+  --site-label Stanford `
+  --years All `
+  --date 20260303
+```
 
-Inside your virtual environment:
+Run the real-case smoke test against `test_data/local.db`:
 
-python tulsa_site_pipeline.py \
-    --site Stanford_064 \
-    --site-label Stanford \
-    --years All \
-    --date 20251119 \
-    --trend-with-gantt
+```powershell
+.\.venv\Scripts\python.exe testing\smoke_test_test_data.py
+```
 
+That smoke test currently validates:
 
-Key optional flags:
+- direct `local.db` ingestion
+- state reconstruction
+- timing summary generation
+- time sanity output
+- Gantt plot generation
 
---skip-collect
+## Current Pipeline Stages
 
---skip-states
+1. `tulsa_collect_auditlogs.py`
+   Collects `AuditLogRecords` into `auditlogs_<site>.csv`.
 
---skip-summary
+2. `tulsa_state_machine.py`
+   Reconstructs persistent workflow states and computes relative timing columns.
 
---skip-plots
+3. `tulsa_build_timing_summary.py`
+   Aggregates patient-level timing tables.
 
---no-filter-outliers
+4. `tulsa_plot_timing.py`
+   Produces stacked plots, histograms, and a Gantt driven from state rows.
 
---root <dir> to override Profound Medical root
+5. `tulsa_gantt_plots.py`
+   Produces summary-based Gantt plots from timing-summary columns.
 
---analysis-root <dir> to redirect all analysis output
+6. `tulsa_trend_analysis.py`
+   Produces trend and variability outputs.
 
-Purpose of /testing
+## Notes
 
-The /testing directory contains:
-
-Legacy scripts
-
-Prototypes
-
-Diagnostics
-
-Site-specific batch files
-
-Temporary comparisons and sanity checks
-
-Nothing in /testing is required for pipeline operation; they remain as references and tools for debugging or exploratory work.
+- The Python pipeline is organized around Gantt-ready workflow reconstruction.
+- Some legacy sites may still require extra enrichment beyond `AuditLogRecords`
+  and `Sessions`, such as timing-sheet-derived boundaries.
+- `test_output/` is ignored and intended for generated smoke-test artifacts.
