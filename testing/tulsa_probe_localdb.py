@@ -9,7 +9,7 @@ Minimal probe script to verify we can:
 - Open it with sqlite3
 - Read from AuditLogRecords (if present)
 
-No Excel. No year filtering. No merging local2.db.
+No Excel. No year filtering. `local.db` only.
 """
 
 import argparse

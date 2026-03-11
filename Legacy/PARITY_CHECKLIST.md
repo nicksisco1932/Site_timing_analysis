@@ -40,7 +40,7 @@ Target:
 - [x] Persistent workflow-state carry-forward across intermediate audit rows
 - [x] Shared workflow order/colors across plots and summaries
 - [x] Root script wrappers preserved after `src/` reorganization
-- [ ] `local2.db` merge in the modern production collector
+- [x] No `local2.db` support required in the modern Python collector
 - [ ] External timing-sheet enrichment when required by older site data
 - [ ] Formal comparison against one or more historical R-generated outputs
 
@@ -51,3 +51,5 @@ Target:
 - The `Review` state exists in the model but is not currently represented in the
   provided `test_data/local.db` output; this needs confirmation against more
   real cases.
+- `local2.db` is intentionally out of scope for the Python pipeline. The
+  supported input model is `local.db` plus `Sessions` data when present.

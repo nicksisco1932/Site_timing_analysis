@@ -11,7 +11,6 @@ Current behavior:
 - Enumerates case folders under a site.
 - For each case:
     * Locates local.db (direct or inside zipped sessions).
-    * Optionally merges local2.db if present.
     * Reads AuditLogRecords.
     * Determines treatment year from first TimeStamp.
     * Includes or skips case based on --years selection.
@@ -142,32 +141,6 @@ def read_auditlog_from_db(dbfile: Path) -> pd.DataFrame:
     return df
 
 
-def merge_local2_if_present(case_dir: Path, tempfolder: Path, auditlog: pd.DataFrame) -> pd.DataFrame:
-    """
-    If local2.db exists in the case_dir, copy and merge its AuditLogRecords.
-    """
-    local2_candidates = glob.glob(str(case_dir / "local2.db"))
-    if not local2_candidates:
-        return auditlog
-
-    local2_src = Path(local2_candidates[0])
-    local2_dst = tempfolder / "local2.db"
-
-    if not local2_dst.exists():
-        local2_dst.write_bytes(local2_src.read_bytes())
-
-    conn2 = sqlite3.connect(local2_dst)
-    try:
-        auditlog2 = pd.read_sql_query("SELECT * FROM AuditLogRecords", conn2)
-    finally:
-        conn2.close()
-
-    if not auditlog2.empty:
-        auditlog = pd.concat([auditlog, auditlog2], ignore_index=True)
-
-    return auditlog
-
-
 def find_or_extract_db(case_dir: Path, tempfolder: Path) -> Path | None:
     """
     Locate local.db for a case:
@@ -270,7 +243,6 @@ def process_case(ii: int, total: int, case_dir: Path, yearlist: list[int], tempf
     Minimal but real processing for one case:
 
     - Find local.db (unzipped or from zipped session).
-    - Merge local2.db if present.
     - Read AuditLogRecords.
     - Determine treatment year from first TimeStamp.
     - Print whether the case is included or excluded by year.
@@ -289,9 +261,6 @@ def process_case(ii: int, total: int, case_dir: Path, yearlist: list[int], tempf
     if auditlog.empty:
         print("    [skip] AuditLogRecords table is empty.")
         return
-
-    # Merge local2.db if present
-    auditlog = merge_local2_if_present(case_dir, tempfolder, auditlog)
 
     # Determine treatment year from first TimeStamp
     if "TimeStamp" not in auditlog.columns:
