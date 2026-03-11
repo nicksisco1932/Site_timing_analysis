@@ -1,145 +1,100 @@
 # Site Timing Analysis
 
-Python pipeline for reconstructing TULSA workflow timelines from `local.db`
-audit logs and producing legacy-style timing summaries and Gantt plots.
+## Purpose
+This repository is a staged Python refactor of the legacy R timing-analysis workflow.  
+It ingests treatment audit logs (`local.db`), reconstructs workflow events/states/timing, and produces legacy-style timeline/Gantt outputs.
 
-The target is the legacy end product, not the legacy implementation:
-the source of truth should be the Python pipeline under `src/`.
+The target is parity of end-product behavior, not line-by-line R translation.
 
-## Layout
+## Current Status
+Implemented pipeline slices:
 
-```text
-.
-|-- src/
-|   `-- site_timing_analysis/
-|       |-- tulsa_collect_auditlogs.py
-|       |-- tulsa_state_machine.py
-|       |-- tulsa_build_timing_summary.py
-|       |-- tulsa_plot_timing.py
-|       |-- tulsa_gantt_plots.py
-|       |-- tulsa_trend_analysis.py
-|       |-- tulsa_time_sanity.py
-|       |-- tulsa_time_cutoff.py
-|       |-- tulsa_day_simulation.py
-|       |-- tulsa_timebase.py
-|       `-- tulsa_workflow.py
-|-- Legacy/
-|   `-- ReadAuditLogs.R
-|-- testing/
-|   |-- smoke_test_test_data.py
-|   |-- sanity.py
-|   |-- sanity_states_by_pt.py
-|   `-- legacy prototype scripts
-|-- tests/
-|   `-- test_test_data_pipeline.py
-|-- test_data/
-|   `-- local.db
-|-- requirements.txt
-|-- requirements-dev.txt
-|-- pyproject.toml
-|-- tulsa_*.py
-`-- *.bat
-```
+1. Discovery and DB source resolution
+2. Ingestion and normalization
+3. Enrichment (Sessions + optional timing-log CSV)
+4. State reconstruction
+5. Timing and rebasing
+6. Plotting (normalized timeline and original-hour timeline)
 
-## What Lives Where
+Still pending:
 
-- `src/site_timing_analysis/`
-  Actual implementation code.
+- Summary/parity hardening (final rollups/checks against legacy outputs)
 
-- `tulsa_*.py` in the repo root
-  Thin compatibility entrypoints. Existing commands and batch files still work,
-  but the real code lives under `src/`.
+## Control-File Workflow
+For any non-trivial work, read in this order:
 
-- `Legacy/`
-  Reference-only R code. Keep for comparison and historical behavior checks.
+1. `AGENTS.md` (rules/constraints)
+2. `SOP.md` (operating workflow)
+3. `ARCHITECTURE.md` (system/module boundaries)
+4. `SESSION.md` (current checkpoint/handoff)
 
-- `testing/`
-  Smoke checks, diagnostics, and older prototype utilities.
+## Environment Setup (Mandatory)
+All Python commands must use the repo-local `.venv` explicitly.
 
-- `tests/`
-  Pytest regression coverage for the current Python pipeline.
+Do not use bare commands like `python`, `pip`, or `pytest`.
 
-- `test_data/`
-  Local test fixtures. `test_data/local.db` is the current real-case smoke-test
-  database.
+Use:
 
-## Install
+- `.\.venv\Scripts\python.exe`
+- `.\.venv\Scripts\pip.exe`
 
-Use the repository virtual environment or install into your own environment:
+Install dependencies:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\pip.exe install -r requirements.txt
+.\.venv\Scripts\pip.exe install -r requirements-dev.txt
+.\.venv\Scripts\pip.exe install -e .
 ```
 
-Optional editable install for the `src/` package:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e .
-```
-
-Install dev dependencies:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-```
-
-## Main Workflow
-
-Run the full site pipeline:
-
-```powershell
-.\.venv\Scripts\python.exe tulsa_site_pipeline.py `
-  --site Stanford_064 `
-  --site-label Stanford `
-  --years All `
-  --date 20260303
-```
-
-Run the real-case smoke test against `test_data/local.db`:
-
-```powershell
-.\.venv\Scripts\python.exe testing\smoke_test_test_data.py
-```
-
-Run the regression tests:
-
+## Run Tests
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-That smoke test currently validates:
+## Basic Pipeline Run
+Current orchestrator is `site_timing_analysis.first_slice_cli` (name retained from early slice work).
 
-- direct `local.db` ingestion
-- state reconstruction
-- timing summary generation
-- time sanity output
-- Gantt plot generation
+```powershell
+.\.venv\Scripts\python.exe -m site_timing_analysis.first_slice_cli `
+  --site Stanford_064 `
+  --years 2025 `
+  --root C:\path\to\site_root_parent `
+  --output .\run_outputs
+```
 
-## Current Pipeline Stages
+Optional timing-log override:
 
-1. `tulsa_collect_auditlogs.py`
-   Collects `AuditLogRecords` into `auditlogs_<site>.csv`.
+```powershell
+.\.venv\Scripts\python.exe -m site_timing_analysis.first_slice_cli `
+  --site Stanford_064 `
+  --years 2025 `
+  --root C:\path\to\site_root_parent `
+  --output .\run_outputs `
+  --timing-log-dir C:\path\to\TimingLogs
+```
 
-2. `tulsa_state_machine.py`
-   Reconstructs persistent workflow states and computes relative timing columns.
+## Output Artifacts
+Main outputs written under the selected `--output` directory:
 
-3. `tulsa_build_timing_summary.py`
-   Aggregates patient-level timing tables.
+- `run_manifest.json`
+- `case_manifest.csv`
+- `normalized_events/<case_id>_normalized_events.csv`
+- `enriched_events/<case_id>_enriched_events.csv`
+- `state_labeled_events/<case_id>_state_labeled_events.csv`
+- `state_intervals/<case_id>_state_intervals.csv`
+- `plots/normalized_timeline.png`
+- `plots/original_hour_timeline.png`
 
-4. `tulsa_plot_timing.py`
-   Produces stacked plots, histograms, and a Gantt driven from state rows.
+## Legacy Reference
+- Legacy R reference: `Legacy/r_reference/ReadAuditLogs.R`
+- Parity checklist notes: `Legacy/PARITY_CHECKLIST.md`
 
-5. `tulsa_gantt_plots.py`
-   Produces summary-based Gantt plots from timing-summary columns.
+## First Real-Data Trial: What To Check
+For the first production-like run, verify:
 
-6. `tulsa_trend_analysis.py`
-   Produces trend and variability outputs.
-
-## Notes
-
-- The Python pipeline is organized around Gantt-ready workflow reconstruction.
-- Some legacy sites may still require extra enrichment beyond `AuditLogRecords`
-  and `Sessions`, such as timing-sheet-derived boundaries.
-- The legacy R reference now lives under `Legacy/r_reference/`, with a working
-  checklist in `Legacy/PARITY_CHECKLIST.md`.
-- `test_output/` is ignored and intended for generated smoke-test artifacts.
+1. `run_manifest.json` has expected case counts (`discovered`, `processed`, `failed`).
+2. Failed cases are explained and actionable (missing DB, malformed timing logs, schema issues).
+3. Warning fields are reviewed per case (`enrichment_warnings`, `state_warnings`, `timing_warnings`, `plot_warnings`).
+4. `state_intervals` look plausible (no unexplained negative starts/durations).
+5. Both plot artifacts are produced and visually consistent with expected treatment chronology.
+6. At least one known legacy case is compared manually against prior R output for sanity.

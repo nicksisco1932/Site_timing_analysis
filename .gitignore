@@ -1,6 +1,27 @@
-/.venv
+# Python virtual environment (repo-local, required for execution)
+.venv/
+
+# Python bytecode and caches
 __pycache__/
 *.pyc
-test_output/
-*.egg-info/
+*.pyo
+*.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build/package artifacts
+build/
+dist/
+*.egg-info/
+
+# Generated run artifacts
+run_outputs/
+manifests/
+test_output/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
