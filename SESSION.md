@@ -593,3 +593,140 @@ Recommended next step:
 2. finalize site-label mapping table to analysis site IDs;
 3. add optional secondary-ID-assisted recovery path for unresolved `Generated Treatment ID` rows;
 4. only then wire bounded TFF outputs into downstream timeline enrichment.
+
+## TFF Post-Implementation Validation Review (2026-03-13)
+
+Reviewed artifacts:
+
+- `run_outputs/tff_audit/tff_normalized_case_table.csv`
+- `run_outputs/tff_audit/tff_case_id_alignment_report.csv`
+- `run_outputs/tff_audit/tff_site_mapping_report.csv`
+- `run_outputs/tff_audit/tff_time_correction_audit_report.csv`
+- `run_outputs/tff_audit/tff_unresolved_soft_fail_report.csv`
+- `run_outputs/tff_audit/tff_timing_column_report.csv`
+- `run_outputs/tff_audit/tff_bounded_normalization_summary.md`
+- `run_outputs/tff_audit/tff_post_impl_validation_review.md`
+
+Quantitative validation:
+
+- usable case coverage (non-soft-fail IDs): `3142/3415` (`92.01%`)
+- unresolved ID rate: `273/3415` (`7.99%`)
+- unmapped site rate (row-weighted by current guessed site code): `3415/3415` (`100%`)
+- corrected timing rate (event-level parseable points): `7883/17847` (`44.17%`)
+- unresolved timing rate (event-level parseable points): `3/17847` (`0.0168%`)
+
+Timing fields strong enough for minimal integration now (workflow events):
+
+- `Timing  Patient enters MRI room `
+- `Timing  Anesthesia starts to prepare the patient `
+- `Timing  Patient is sedated`
+- `Timing  Device Insertion Begins`
+- `Timing  Device Insertion Complete`
+- `Timing  Patient leaves MRI room`
+- `Timing  Patient Transfer to Recovery room`
+
+Minimal safe integration slice recommendation (not implemented yet):
+
+1. add a read-only TFF adapter that joins by canonical `case_id` and ingests only the seven workflow event-time columns above;
+2. keep integration behind a feature flag default-off;
+3. exclude `case_id_soft_fail` and unresolved timing rows from downstream timing replacement, while preserving them in audit outputs;
+4. propagate correction provenance fields (`tff_source_row`, `tff_correction_type`, `tff_time_corrected`) into downstream artifacts;
+5. defer derived timing fields (`Calculated MRI Time`, `Ablation Time`, `Planning Time`, `MRI Time`) until primary event-time integration is stable.
+
+## TFF Deterministic Site Normalization Implemented (2026-03-13)
+
+Implementation scope:
+
+- bounded TFF layer only (`src/site_timing_analysis/tff_bounded.py`)
+- no integration into main state-interval pipeline
+
+Deterministic mapping logic:
+
+- normalize site labels (`site_label_raw` -> `site_label_normalized` / `site_key`)
+- derive candidate site code from canonical `case_id` prefix (`AAA999_..` -> `999`)
+- build explicit label-level normalization table with required status classes:
+  - `mapped`: exactly one case-ID-derived site code for the label
+  - `unmapped`: no usable case-ID-derived site code evidence (or blank label)
+  - `ambiguous`: multiple competing case-ID-derived site codes
+- propagate mapping status/code back into normalized case rows
+
+New/updated bounded artifacts:
+
+- `run_outputs/tff_audit/tff_site_mapping_report.csv`
+- `run_outputs/tff_audit/tff_site_normalization_table.csv`
+- `run_outputs/tff_audit/tff_site_normalization_summary.md`
+- `run_outputs/tff_audit/tff_normalized_case_table.csv` (now includes `mapping_status`, `normalized_site_code`, `mapping_reason`, `candidate_site_codes`)
+- `run_outputs/tff_audit/tff_unresolved_soft_fail_report.csv` (now includes `site_unmapped`/`site_ambiguous` issues)
+
+Coverage after deterministic site normalization:
+
+- label-level: `58 mapped`, `2 unmapped`, `0 ambiguous`
+- row-level: `3397 mapped` / `3415 total` (`99.47%` mapped)
+- remaining unmapped rows: `18` (`0.53%`)
+
+Remaining unmapped labels:
+
+1. `London Health Sciences Centre (UWO)` (16 rows; no case-ID site-code evidence)
+2. blank site label (2 rows)
+
+Validation status:
+
+- focused tests: `tests/test_tff_bounded_slice.py` includes mapped + ambiguous-site cases
+- full suite: `73 passed`
+
+Next recommended step:
+
+1. approve handling for the two unmapped site labels (manual mapping vs keep unmapped);
+2. proceed to the read-only TFF adapter slice using mapped rows only, with provenance fields preserved;
+3. keep unmapped/soft-fail rows in audit outputs and excluded from downstream timing replacement.
+
+## TFF Read-Only Adapter Slice Implemented (2026-03-13)
+
+Implementation scope:
+
+- new module: `src/site_timing_analysis/tff_adapter.py`
+- read-only join of bounded TFF normalized metadata onto pipeline case-level results by canonical `case_id`
+- join kept behind feature flag (`--enable-tff-adapter`) and default-off
+- optional explicit table input via `--tff-normalized-case-table`
+
+Integrated TFF workflow timing fields:
+
+- `Patient enters MRI room`
+- `Anesthesia starts to prepare the patient`
+- `Patient is sedated`
+- `Device Insertion Begins`
+- `Device Insertion Complete`
+- `Patient leaves MRI room`
+- `Patient Transfer to Recovery room`
+
+Provenance fields preserved in joined case-level outputs:
+
+- `tff_source_row`
+- `tff_time_corrected`
+- `tff_correction_type`
+- `tff_parse_status`
+
+Artifacts added when adapter is enabled:
+
+- `tff_adapter/tff_case_join.csv`
+- `tff_adapter/tff_integration_summary.md`
+
+Behavior and constraints:
+
+- adapter is read-only and does not replace pipeline timing/state/interval values
+- existing pipeline exports remain unchanged
+- case-ID alignment failures soft-fail with explicit warnings:
+  - `tff_adapter:pipeline_cases_without_tff:<count>`
+  - `tff_adapter:tff_cases_without_pipeline_match:<count>`
+  - duplicate canonical IDs in TFF table are resolved deterministically (earliest `sheet1_row_number`) with warning
+
+Validation:
+
+- new tests: `tests/test_tff_adapter_slice.py`
+- focused + full suite pass: `76 passed`
+
+Next recommended step:
+
+1. run one controlled real-data pass with `--enable-tff-adapter` and inspect `tff_case_join.csv` coverage;
+2. decide policy for downstream use of `tff_parse_status=partial|unresolved` rows;
+3. keep adapter read-only until parity acceptance for any timing-field usage is approved.

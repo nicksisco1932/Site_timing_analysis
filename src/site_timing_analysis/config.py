@@ -57,6 +57,8 @@ def build_run_config(
     timing_log_dir: str | Path | None = None,
     diagnostics: bool = False,
     diagnostics_file: str | Path | None = None,
+    tff_adapter_enabled: bool = False,
+    tff_normalized_case_table: str | Path | None = None,
 ) -> RunConfig:
     normalized_site = site_code.strip()
     if not normalized_site:
@@ -80,6 +82,11 @@ def build_run_config(
     resolved_diagnostics_file = (
         Path(diagnostics_file).expanduser().resolve() if diagnostics_file is not None else None
     )
+    resolved_tff_normalized_case_table = (
+        Path(tff_normalized_case_table).expanduser().resolve()
+        if tff_normalized_case_table is not None
+        else None
+    )
 
     if db_candidate_index is not None and db_candidate_index < 0:
         raise ConfigValidationError("db_candidate_index must be >= 0 when provided.")
@@ -98,6 +105,8 @@ def build_run_config(
         timing_log_dir=resolved_timing_log_dir,
         diagnostics=diagnostics,
         diagnostics_file=resolved_diagnostics_file,
+        tff_adapter_enabled=tff_adapter_enabled,
+        tff_normalized_case_table=resolved_tff_normalized_case_table,
     )
 
 
@@ -114,6 +123,8 @@ def build_run_config_from_mapping(config_data: Mapping[str, Any]) -> RunConfig:
         timing_log_dir=config_data.get("timing_log_dir"),
         diagnostics=bool(config_data.get("diagnostics", False)),
         diagnostics_file=config_data.get("diagnostics_file"),
+        tff_adapter_enabled=bool(config_data.get("tff_adapter_enabled", False)),
+        tff_normalized_case_table=config_data.get("tff_normalized_case_table"),
     )
 
 
@@ -167,6 +178,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional diagnostics output file path. Default: <output>/diagnostics_summary.md",
     )
+    parser.add_argument(
+        "--enable-tff-adapter",
+        action="store_true",
+        help="Enable read-only TFF case-level metadata adapter (default: disabled).",
+    )
+    parser.add_argument(
+        "--tff-normalized-case-table",
+        default=None,
+        help="Path to tff_normalized_case_table.csv. "
+        "Default when adapter enabled: <output>/tff_audit/tff_normalized_case_table.csv",
+    )
     return parser
 
 
@@ -185,4 +207,6 @@ def build_run_config_from_args(argv: list[str] | None = None) -> RunConfig:
         timing_log_dir=args.timing_log_dir,
         diagnostics=args.diagnostics,
         diagnostics_file=args.diagnostics_file,
+        tff_adapter_enabled=args.enable_tff_adapter,
+        tff_normalized_case_table=args.tff_normalized_case_table,
     )

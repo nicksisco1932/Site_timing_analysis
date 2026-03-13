@@ -29,6 +29,7 @@ from .plotting import generate_timeline_plots
 from .state_machine import assign_states
 from .timing import compute_state_intervals
 from .timing_log import find_timing_log, parse_timing_log_csv
+from .tff_adapter import apply_read_only_tff_adapter
 
 
 def _case_matches_year(raw_timestamp: str | None, allowed_years: set[int]) -> bool:
@@ -384,6 +385,15 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
     else:
         warnings.append("plot:skipped_no_processed_cases")
 
+    tff_artifact_paths: dict[str, str] = {}
+    if config.tff_adapter_enabled:
+        case_results, tff_artifact_paths, tff_warnings = apply_read_only_tff_adapter(
+            case_results=case_results,
+            output_dir=config.output_dir,
+            tff_case_table=config.tff_normalized_case_table,
+        )
+        warnings.extend(tff_warnings)
+
     run_manifest_path = config.output_dir / "run_manifest.json"
     artifact_paths = {
         "case_manifest": str(case_manifest_path),
@@ -395,6 +405,7 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
     }
     for key, value in plot_paths.items():
         artifact_paths[key] = str(value)
+    artifact_paths.update(tff_artifact_paths)
 
     run_manifest = RunManifest(
         run_id=str(uuid4()),
