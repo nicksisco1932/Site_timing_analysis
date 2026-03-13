@@ -45,6 +45,8 @@ _DIRECT_PS_CABLE_FIELDS: tuple[str, ...] = (
 )
 _INFERRED_PS_SERIAL_FIELDS: tuple[str, ...] = ("PSSerialNumber", "PSSerial")
 _CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9]+_\d{2}-\d{3}$")
+_PS_CABLE_SERIAL_QUESTION_KEY = "ps_cable_serial"
+_PS_CABLE_SERIAL_QUESTION_TYPE = "ps-cable-serial"
 
 
 @dataclass(slots=True)
@@ -1259,6 +1261,245 @@ def _resolve_query_batch_id(
     return str(row["ingest_batch_id"])
 
 
+def _empty_resolved_linkage() -> dict[str, str]:
+    return {
+        "session_id": "",
+        "treatment_id": "",
+        "session_uid": "",
+        "treatment_uid": "",
+        "patient_id": "",
+        "session_start": "",
+        "treatment_start": "",
+        "linkage_source_table": "",
+        "linkage_source_row_id": "",
+    }
+
+
+def _row_to_resolved_linkage(row: sqlite3.Row | None) -> dict[str, str]:
+    if row is None:
+        return _empty_resolved_linkage()
+    return {
+        "session_id": _safe_text(row["session_id"]),
+        "treatment_id": _safe_text(row["treatment_id"]),
+        "session_uid": _safe_text(row["session_uid"]),
+        "treatment_uid": _safe_text(row["treatment_uid"]),
+        "patient_id": _safe_text(row["patient_id"]),
+        "session_start": _safe_text(row["session_start"]),
+        "treatment_start": _safe_text(row["treatment_start"]),
+        "linkage_source_table": _safe_text(row["source_table"]),
+        "linkage_source_row_id": _safe_text(row["source_row_id"]),
+    }
+
+
+def _answer_status_from_type(answer_type: str) -> str:
+    if answer_type == "missing":
+        return "unavailable"
+    return answer_type
+
+
+def _inference_rule_for_answer(answer_status: str) -> str:
+    if answer_status != "inferred":
+        return ""
+    return "fallback_to_ps_serial_field_when_no_direct_ps_cable_serial_exists"
+
+
+def _lookup_source_db_path(
+    conn: sqlite3.Connection,
+    *,
+    ingest_batch_id: str,
+    case_id: str,
+) -> str:
+    row = conn.execute(
+        """
+        SELECT source_db_path
+        FROM ingested_cases
+        WHERE ingest_batch_id = ? AND case_id = ?
+        """,
+        (ingest_batch_id, case_id),
+    ).fetchone()
+    if row is None:
+        return ""
+    return _safe_text(row["source_db_path"])
+
+
+def _select_ps_provenance_candidates(
+    conn: sqlite3.Connection,
+    *,
+    ingest_batch_id: str,
+    case_id: str,
+) -> list[dict[str, Any]]:
+    provenance_rows = conn.execute(
+        """
+        SELECT identifier_type, identifier_value, source_table, source_column,
+               source_row_id, confidence, note
+        FROM hardware_identifiers
+        WHERE ingest_batch_id = ? AND case_id = ?
+          AND identifier_type IN ('ps_cable_serial_number', 'ps_serial_number')
+        ORDER BY source_table, source_column, source_row_id
+        """,
+        (ingest_batch_id, case_id),
+    ).fetchall()
+    return [dict(row) for row in provenance_rows]
+
+
+def _select_chosen_identifier_row(
+    conn: sqlite3.Connection,
+    *,
+    ingest_batch_id: str,
+    case_id: str,
+    answer_type: str,
+    source_table: str,
+    source_field: str,
+    source_row_id: str,
+    source_value: str,
+) -> dict[str, Any] | None:
+    if answer_type == "direct":
+        identifier_type = "ps_cable_serial_number"
+    elif answer_type == "inferred":
+        identifier_type = "ps_serial_number"
+    else:
+        return None
+
+    row = conn.execute(
+        """
+        SELECT session_id, treatment_id, identifier_type, identifier_value, source_table,
+               source_column, source_row_id, confidence, note
+        FROM hardware_identifiers
+        WHERE ingest_batch_id = ? AND case_id = ? AND identifier_type = ?
+          AND source_table = ? AND source_column = ? AND source_row_id = ? AND identifier_value = ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (
+            ingest_batch_id,
+            case_id,
+            identifier_type,
+            source_table,
+            source_field,
+            source_row_id,
+            source_value,
+        ),
+    ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _resolve_query_linkage(
+    conn: sqlite3.Connection,
+    *,
+    ingest_batch_id: str,
+    case_id: str,
+    selected_identifier: dict[str, Any] | None,
+) -> dict[str, str]:
+    base_query = """
+        SELECT session_id, treatment_id, session_uid, treatment_uid, patient_id,
+               session_start, treatment_start, source_table, source_row_id
+        FROM case_treatment_context
+        WHERE ingest_batch_id = ? AND case_id = ?
+    """
+    base_params: list[Any] = [ingest_batch_id, case_id]
+
+    if selected_identifier is not None:
+        treatment_id = _safe_text(selected_identifier.get("treatment_id"))
+        session_id = _safe_text(selected_identifier.get("session_id"))
+        if treatment_id:
+            row = conn.execute(
+                base_query + " AND treatment_id = ? ORDER BY source_table, source_row_id LIMIT 1",
+                (*base_params, treatment_id),
+            ).fetchone()
+            if row is not None:
+                return _row_to_resolved_linkage(row)
+        if session_id:
+            row = conn.execute(
+                base_query
+                + " AND session_id = ? "
+                + "ORDER BY CASE WHEN COALESCE(treatment_id, '') <> '' THEN 0 ELSE 1 END, "
+                + "source_table, source_row_id LIMIT 1",
+                (*base_params, session_id),
+            ).fetchone()
+            if row is not None:
+                return _row_to_resolved_linkage(row)
+        if session_id or treatment_id:
+            linkage = _empty_resolved_linkage()
+            linkage["session_id"] = session_id
+            linkage["treatment_id"] = treatment_id
+            return linkage
+
+    row = conn.execute(
+        base_query
+        + " ORDER BY CASE WHEN COALESCE(treatment_id, '') <> '' THEN 0 ELSE 1 END, "
+        + "source_table, source_row_id LIMIT 1",
+        tuple(base_params),
+    ).fetchone()
+    return _row_to_resolved_linkage(row)
+
+
+def _build_ps_cable_proof_note(
+    *,
+    case_id: str,
+    answer_status: str,
+    source_table: str,
+    source_field: str,
+    source_row_id: str,
+    direct_candidate_count: int,
+    inferred_candidate_count: int,
+    resolved_linkage: dict[str, str],
+    unavailable_reason: str = "",
+) -> str:
+    if unavailable_reason == "no_ingested_case_found":
+        return f"No ingested hardware lookup case was found for {case_id}; answer unavailable."
+    if unavailable_reason == "case_summary_missing_for_ingested_case":
+        return f"Ingested case {case_id} has no case_hardware_summary row; answer unavailable."
+
+    linkage_text = ""
+    if resolved_linkage["session_id"] or resolved_linkage["treatment_id"]:
+        linkage_text = (
+            f" linked to session {resolved_linkage['session_id'] or '?'}"
+            f" / treatment {resolved_linkage['treatment_id'] or '?'}"
+        )
+    source_ref = f"{source_table}.{source_field} row {source_row_id}" if source_table and source_field else "no source row"
+
+    if answer_status == "direct":
+        return f"Returned direct PS cable serial from {source_ref}{linkage_text}."
+    if answer_status == "inferred":
+        return (
+            f"No direct PS cable serial candidates were ingested ({direct_candidate_count}); "
+            f"used {source_ref}{linkage_text} via PS serial fallback."
+        )
+    return (
+        f"No direct PS cable serial candidates ({direct_candidate_count}) or PS serial fallback "
+        f"candidates ({inferred_candidate_count}) were ingested for {case_id}; answer unavailable."
+    )
+
+
+def _build_query_proof_row(result: dict[str, Any]) -> dict[str, str]:
+    linkage = result.get("resolved_session_treatment_linkage") or _empty_resolved_linkage()
+    return {
+        "case_id": _safe_text(result.get("case_id")),
+        "ingest_batch_id": _safe_text(result.get("ingest_batch_id")),
+        "question_type": _safe_text(result.get("question_type")),
+        "returned_answer": _safe_text(result.get("answer")),
+        "answer_status": _safe_text(result.get("answer_status")),
+        "inference_rule": _safe_text(result.get("inference_rule")),
+        "source_db_path": _safe_text(result.get("source_db_path")),
+        "source_table": _safe_text(result.get("source_table")),
+        "source_field": _safe_text(result.get("source_field")),
+        "source_row_id": _safe_text(result.get("source_row_id")),
+        "raw_source_value": _safe_text(result.get("raw_source_value")),
+        "resolved_session_id": _safe_text(linkage.get("session_id")),
+        "resolved_treatment_id": _safe_text(linkage.get("treatment_id")),
+        "resolved_session_uid": _safe_text(linkage.get("session_uid")),
+        "resolved_treatment_uid": _safe_text(linkage.get("treatment_uid")),
+        "resolved_patient_id": _safe_text(linkage.get("patient_id")),
+        "resolved_session_start": _safe_text(linkage.get("session_start")),
+        "resolved_treatment_start": _safe_text(linkage.get("treatment_start")),
+        "resolved_linkage_source_table": _safe_text(linkage.get("linkage_source_table")),
+        "resolved_linkage_source_row_id": _safe_text(linkage.get("linkage_source_row_id")),
+        "proof_note": _safe_text(result.get("proof_note")),
+    }
+
+
 def query_ps_cable_serial(
     *,
     lookup_db_path: Path,
@@ -1274,21 +1515,55 @@ def query_ps_cable_serial(
             ingest_batch_id=ingest_batch_id,
         )
         if resolved_batch_id is None:
+            proof_note = _build_ps_cable_proof_note(
+                case_id=normalized_case_id,
+                answer_status="unavailable",
+                source_table="",
+                source_field="",
+                source_row_id="",
+                direct_candidate_count=0,
+                inferred_candidate_count=0,
+                resolved_linkage=_empty_resolved_linkage(),
+                unavailable_reason="no_ingested_case_found",
+            )
             return {
                 "case_id": normalized_case_id,
                 "ingest_batch_id": "",
-                "question": "ps_cable_serial",
+                "question": _PS_CABLE_SERIAL_QUESTION_KEY,
+                "question_type": _PS_CABLE_SERIAL_QUESTION_TYPE,
                 "answer": "",
                 "answer_type": "missing",
+                "answer_status": "unavailable",
+                "source_db_path": "",
                 "source_table": "",
                 "source_field": "",
                 "source_row_id": "",
                 "source_value": "",
+                "raw_source_value": "",
                 "inference": "missing",
+                "inference_rule": "",
                 "note": "no_ingested_case_found",
+                "proof_note": proof_note,
+                "resolved_session_treatment_linkage": _empty_resolved_linkage(),
                 "provenance_candidates": [],
             }
 
+        source_db_path = _lookup_source_db_path(
+            conn,
+            ingest_batch_id=resolved_batch_id,
+            case_id=normalized_case_id,
+        )
+        provenance = _select_ps_provenance_candidates(
+            conn,
+            ingest_batch_id=resolved_batch_id,
+            case_id=normalized_case_id,
+        )
+        direct_candidate_count = sum(
+            1 for row in provenance if row["identifier_type"] == "ps_cable_serial_number"
+        )
+        inferred_candidate_count = sum(
+            1 for row in provenance if row["identifier_type"] == "ps_serial_number"
+        )
         summary = conn.execute(
             """
             SELECT case_id, ingest_batch_id, ps_cable_serial_answer, answer_type,
@@ -1299,63 +1574,130 @@ def query_ps_cable_serial(
             (resolved_batch_id, normalized_case_id),
         ).fetchone()
         if summary is None:
+            resolved_linkage = _resolve_query_linkage(
+                conn,
+                ingest_batch_id=resolved_batch_id,
+                case_id=normalized_case_id,
+                selected_identifier=None,
+            )
+            proof_note = _build_ps_cable_proof_note(
+                case_id=normalized_case_id,
+                answer_status="unavailable",
+                source_table="",
+                source_field="",
+                source_row_id="",
+                direct_candidate_count=direct_candidate_count,
+                inferred_candidate_count=inferred_candidate_count,
+                resolved_linkage=resolved_linkage,
+                unavailable_reason="case_summary_missing_for_ingested_case",
+            )
             return {
                 "case_id": normalized_case_id,
                 "ingest_batch_id": resolved_batch_id,
-                "question": "ps_cable_serial",
+                "question": _PS_CABLE_SERIAL_QUESTION_KEY,
+                "question_type": _PS_CABLE_SERIAL_QUESTION_TYPE,
                 "answer": "",
                 "answer_type": "missing",
+                "answer_status": "unavailable",
+                "source_db_path": source_db_path,
                 "source_table": "",
                 "source_field": "",
                 "source_row_id": "",
                 "source_value": "",
+                "raw_source_value": "",
                 "inference": "missing",
+                "inference_rule": "",
                 "note": "case_summary_missing_for_ingested_case",
-                "provenance_candidates": [],
+                "proof_note": proof_note,
+                "resolved_session_treatment_linkage": resolved_linkage,
+                "provenance_candidates": provenance,
             }
 
-        provenance_rows = conn.execute(
-            """
-            SELECT identifier_type, identifier_value, source_table, source_column,
-                   source_row_id, confidence, note
-            FROM hardware_identifiers
-            WHERE ingest_batch_id = ? AND case_id = ?
-              AND identifier_type IN ('ps_cable_serial_number', 'ps_serial_number')
-            ORDER BY source_table, source_column, source_row_id
-            """,
-            (resolved_batch_id, normalized_case_id),
-        ).fetchall()
-        provenance = [dict(row) for row in provenance_rows]
+        answer_status = _answer_status_from_type(_safe_text(summary["answer_type"]))
+        inference_rule = _inference_rule_for_answer(answer_status)
+        selected_identifier = _select_chosen_identifier_row(
+            conn,
+            ingest_batch_id=resolved_batch_id,
+            case_id=normalized_case_id,
+            answer_type=_safe_text(summary["answer_type"]),
+            source_table=_safe_text(summary["source_table"]),
+            source_field=_safe_text(summary["source_field"]),
+            source_row_id=_safe_text(summary["source_row_id"]),
+            source_value=_safe_text(summary["source_value"]),
+        )
+        resolved_linkage = _resolve_query_linkage(
+            conn,
+            ingest_batch_id=resolved_batch_id,
+            case_id=normalized_case_id,
+            selected_identifier=selected_identifier,
+        )
+        proof_note = _build_ps_cable_proof_note(
+            case_id=normalized_case_id,
+            answer_status=answer_status,
+            source_table=_safe_text(summary["source_table"]),
+            source_field=_safe_text(summary["source_field"]),
+            source_row_id=_safe_text(summary["source_row_id"]),
+            direct_candidate_count=direct_candidate_count,
+            inferred_candidate_count=inferred_candidate_count,
+            resolved_linkage=resolved_linkage,
+        )
         return {
             "case_id": normalized_case_id,
             "ingest_batch_id": resolved_batch_id,
-            "question": "ps_cable_serial",
+            "question": _PS_CABLE_SERIAL_QUESTION_KEY,
+            "question_type": _PS_CABLE_SERIAL_QUESTION_TYPE,
             "answer": summary["ps_cable_serial_answer"],
             "answer_type": summary["answer_type"],
+            "answer_status": answer_status,
+            "source_db_path": source_db_path,
             "source_table": summary["source_table"],
             "source_field": summary["source_field"],
             "source_row_id": summary["source_row_id"],
             "source_value": summary["source_value"],
+            "raw_source_value": summary["source_value"],
             "inference": summary["answer_type"],
+            "inference_rule": inference_rule,
             "note": summary["note"],
+            "proof_note": proof_note,
+            "resolved_session_treatment_linkage": resolved_linkage,
             "provenance_candidates": provenance,
         }
 
 
 def _write_query_audit(result: dict[str, Any], output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    linkage = result.get("resolved_session_treatment_linkage") or _empty_resolved_linkage()
     lines = [
-        "# Hardware Query Audit",
+        "# Hardware Query Proof Report",
         "",
-        f"- case_id: `{result['case_id']}`",
+        "## Query",
+        f"- queried_case_id: `{result['case_id']}`",
         f"- ingest_batch_id: `{result['ingest_batch_id']}`",
-        f"- question: `{result['question']}`",
-        f"- answer: `{result['answer']}`",
-        f"- answer_type: `{result['answer_type']}`",
+        f"- question_type: `{result.get('question_type', result['question'])}`",
+        f"- returned_answer: `{result['answer']}`",
+        f"- answer_status: `{result.get('answer_status', result['answer_type'])}`",
+        f"- inference_rule: `{result.get('inference_rule', '')}`",
+        "",
+        "## Source Proof",
+        f"- source_db_path: `{result.get('source_db_path', '')}`",
         f"- source_table: `{result['source_table']}`",
         f"- source_field: `{result['source_field']}`",
         f"- source_row_id: `{result['source_row_id']}`",
-        f"- note: `{result['note']}`",
+        f"- raw_source_value: `{result.get('raw_source_value', result['source_value'])}`",
+        "",
+        "## Resolved Session/Treatment Linkage",
+        f"- session_id: `{linkage['session_id']}`",
+        f"- treatment_id: `{linkage['treatment_id']}`",
+        f"- session_uid: `{linkage['session_uid']}`",
+        f"- treatment_uid: `{linkage['treatment_uid']}`",
+        f"- patient_id: `{linkage['patient_id']}`",
+        f"- session_start: `{linkage['session_start']}`",
+        f"- treatment_start: `{linkage['treatment_start']}`",
+        f"- linkage_source_table: `{linkage['linkage_source_table']}`",
+        f"- linkage_source_row_id: `{linkage['linkage_source_row_id']}`",
+        "",
+        "## Proof Note",
+        _safe_text(result.get("proof_note")),
         "",
         "## Provenance Candidates",
     ]
@@ -1371,6 +1713,16 @@ def _write_query_audit(result: dict[str, Any], output_path: Path) -> Path:
     else:
         lines.append("- none")
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output_path
+
+
+def _write_query_proof_csv(result: dict[str, Any], output_path: Path) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    row = _build_query_proof_row(result)
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(row)
     return output_path
 
 
@@ -1416,7 +1768,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Structured hardware question to answer.",
     )
     query_parser.add_argument("--ingest-batch-id", default=None, help="Optional specific ingest batch id.")
-    query_parser.add_argument("--audit-output", default=None, help="Optional markdown audit output path.")
+    query_parser.add_argument(
+        "--audit-output",
+        default=None,
+        help="Optional markdown proof report output path.",
+    )
+    query_parser.add_argument(
+        "--proof-csv-output",
+        default=None,
+        help="Optional machine-readable CSV proof-row output path.",
+    )
     return parser
 
 
@@ -1458,6 +1819,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.audit_output is not None:
             audit_path = _write_query_audit(result, Path(args.audit_output).expanduser().resolve())
             result["audit_output"] = str(audit_path)
+            csv_output_path = (
+                Path(args.proof_csv_output).expanduser().resolve()
+                if args.proof_csv_output is not None
+                else audit_path.with_suffix(".csv")
+            )
+            csv_path = _write_query_proof_csv(result, csv_output_path)
+            result["proof_csv_output"] = str(csv_path)
+        elif args.proof_csv_output is not None:
+            csv_path = _write_query_proof_csv(
+                result,
+                Path(args.proof_csv_output).expanduser().resolve(),
+            )
+            result["proof_csv_output"] = str(csv_path)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
 

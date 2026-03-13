@@ -881,3 +881,47 @@ Next recommended step:
 1. define additional structured question keys (PS serial by treatment, UA test result linkage, pressure/amplifier summaries);
 2. run multi-case ingestion on one site root and review duplicate/consistency handling;
 3. decide whether this lookup DB remains SQLite-only or gets mirrored to catalog-backed multi-site metadata in later roadmap.
+
+## Hardware Lookup Query Proof Artifacts Implemented (2026-03-13)
+
+Objective addressed:
+
+- add proof-grade provenance output for the existing `ps-cable-serial` query path before expanding query coverage.
+
+Implementation scope:
+
+- updated `src/site_timing_analysis/hardware_lookup.py` only for the existing `ps-cable-serial` query/export path
+- preserved current answer-selection behavior (`direct` first, `PSSerialNumber`/`PSSerial` fallback, soft-fail when unavailable)
+- no new hardware question types added
+
+Query output additions:
+
+- explicit `question_type` (`ps-cable-serial`)
+- explicit `answer_status` (`direct` / `inferred` / `unavailable`)
+- explicit `inference_rule` when inferred
+- exact `source_db_path`
+- exact source table / field / row ID
+- raw source value
+- resolved session/treatment linkage used for the chosen answer
+- concise `proof_note`
+
+Per-query proof artifacts:
+
+- markdown proof report via `--audit-output`
+- machine-readable single-row CSV proof export (auto-written alongside markdown by default, or explicit via `--proof-csv-output`)
+
+Example proof target now supported:
+
+- case `064_01-137` can be proven as inferred from `Treatments.PSSerialNumber` with exact row/DB path plus resolved linkage fields in both JSON output and proof artifacts
+
+Validation:
+
+- updated tests: `tests/test_hardware_lookup.py`
+- targeted hardware lookup tests pass
+- full suite pass: `82 passed`
+
+Next recommended step:
+
+1. keep new query additions proof-first and reuse the same proof artifact shape for any next hardware question key;
+2. expand hardware query coverage only after reviewing proof outputs on a multi-case/site ingest;
+3. decide whether proof rows should later be mirrored into the planned catalog-backed metadata workflow.
