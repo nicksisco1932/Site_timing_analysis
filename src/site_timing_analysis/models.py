@@ -22,6 +22,9 @@ class RunConfig:
     timing_log_dir: Path | None = None
     diagnostics: bool = False
     diagnostics_file: Path | None = None
+    tff_adapter_enabled: bool = False
+    tff_normalized_case_table: Path | None = None
+    tff_filter_known_exclusions: bool = False
 
 
 @dataclass(slots=True)

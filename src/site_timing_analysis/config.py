@@ -59,6 +59,7 @@ def build_run_config(
     diagnostics_file: str | Path | None = None,
     tff_adapter_enabled: bool = False,
     tff_normalized_case_table: str | Path | None = None,
+    tff_filter_known_exclusions: bool = False,
 ) -> RunConfig:
     normalized_site = site_code.strip()
     if not normalized_site:
@@ -107,6 +108,7 @@ def build_run_config(
         diagnostics_file=resolved_diagnostics_file,
         tff_adapter_enabled=tff_adapter_enabled,
         tff_normalized_case_table=resolved_tff_normalized_case_table,
+        tff_filter_known_exclusions=tff_filter_known_exclusions,
     )
 
 
@@ -125,6 +127,7 @@ def build_run_config_from_mapping(config_data: Mapping[str, Any]) -> RunConfig:
         diagnostics_file=config_data.get("diagnostics_file"),
         tff_adapter_enabled=bool(config_data.get("tff_adapter_enabled", False)),
         tff_normalized_case_table=config_data.get("tff_normalized_case_table"),
+        tff_filter_known_exclusions=bool(config_data.get("tff_filter_known_exclusions", False)),
     )
 
 
@@ -189,6 +192,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to tff_normalized_case_table.csv. "
         "Default when adapter enabled: <output>/tff_audit/tff_normalized_case_table.csv",
     )
+    parser.add_argument(
+        "--tff-filter-known-exclusions",
+        action="store_true",
+        help="Optionally filter known exclusion-case classes (e.g. known Stanford RCT IDs) "
+        "from TFF join quality metrics.",
+    )
     return parser
 
 
@@ -209,4 +218,5 @@ def build_run_config_from_args(argv: list[str] | None = None) -> RunConfig:
         diagnostics_file=args.diagnostics_file,
         tff_adapter_enabled=args.enable_tff_adapter,
         tff_normalized_case_table=args.tff_normalized_case_table,
+        tff_filter_known_exclusions=args.tff_filter_known_exclusions,
     )

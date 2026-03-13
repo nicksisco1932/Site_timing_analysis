@@ -219,3 +219,95 @@ def test_cli_tff_adapter_enabled_writes_join_artifacts(tmp_path: Path) -> None:
     assert processed[0]["tff_join_status"] == "matched"
     assert processed[0]["tff_source_row"] == 10
     assert processed[0]["tff_time_corrected"] is True
+
+
+def test_tff_adapter_known_exclusion_filter_is_optional_and_auditable(tmp_path: Path) -> None:
+    tff_table = tmp_path / "tff_audit" / "tff_normalized_case_table.csv"
+    _write_tff_normalized_case_table(tff_table)
+    case_results = [
+        {"case_id": "STA_01-003", "status": "processed"},
+        {"case_id": "064_01-001", "status": "processed"},
+        {"case_id": "064_01-003", "status": "processed"},
+    ]
+
+    updated_results, artifacts, warnings = apply_read_only_tff_adapter(
+        case_results=case_results,
+        output_dir=tmp_path / "out",
+        tff_case_table=tff_table,
+        filter_known_exclusions=True,
+    )
+
+    by_case = {str(row["case_id"]): row for row in updated_results}
+    assert by_case["STA_01-003"]["tff_join_status"] == "filtered_known_exclusion"
+    assert by_case["STA_01-003"]["tff_exclusion_class"] == "rct_stanford_sta"
+    assert by_case["064_01-001"]["tff_join_status"] == "matched"
+    assert by_case["064_01-003"]["tff_join_status"] == "no_tff_match"
+    assert any("tff_adapter:known_exclusions_filtered:1" in warning for warning in warnings)
+    assert any("tff_adapter:pipeline_cases_without_tff:1" in warning for warning in warnings)
+
+    assert "tff_filtered_known_exclusions" in artifacts
+    filtered_path = Path(artifacts["tff_filtered_known_exclusions"])
+    assert filtered_path.exists()
+    with filtered_path.open("r", encoding="utf-8", newline="") as handle:
+        filtered_rows = list(csv.DictReader(handle))
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0]["case_id"] == "STA_01-003"
+
+    summary_path = Path(artifacts["tff_integration_summary"])
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "filtered known exclusions: `1`" in summary_text
+    assert "true unmatched pipeline cases: `1`" in summary_text
+
+
+def test_cli_tff_known_exclusion_filter_flag_marks_rct_cases(tmp_path: Path) -> None:
+    root_dir = tmp_path / "root"
+    site_dir = root_dir / "Stanford_064"
+    case_dir = site_dir / "STA_01-003"
+    case_dir.mkdir(parents=True)
+
+    db_path = case_dir / "local.db"
+    _create_sqlite(
+        db_path,
+        [
+            "CREATE TABLE AuditLogRecords ("
+            "Id INTEGER PRIMARY KEY, "
+            "TimeStamp TEXT, "
+            "AuditRecordBase_Type TEXT, "
+            "SegmentId TEXT, "
+            "EventKind INTEGER"
+            ")",
+            "INSERT INTO AuditLogRecords (TimeStamp, AuditRecordBase_Type, SegmentId, EventKind) "
+            "VALUES ('2025-01-01 12:00:00.0000000', 'SetupWorkflowRecord', 'SEG-1', 1)",
+            "INSERT INTO AuditLogRecords (TimeStamp, AuditRecordBase_Type, SegmentId, EventKind) "
+            "VALUES ('2025-01-01 12:30:00.0000000', 'AlignmentWorkflowRecord', 'SEG-1', 1)",
+        ],
+    )
+
+    tff_table = tmp_path / "tff_audit" / "tff_normalized_case_table.csv"
+    _write_tff_normalized_case_table(tff_table)
+
+    output_dir = tmp_path / "out"
+    manifest = run_first_slice(
+        [
+            "--site",
+            "Stanford_064",
+            "--years",
+            "2025",
+            "--root",
+            str(root_dir),
+            "--output",
+            str(output_dir),
+            "--enable-tff-adapter",
+            "--tff-filter-known-exclusions",
+            "--tff-normalized-case-table",
+            str(tff_table),
+        ]
+    )
+
+    processed = [row for row in manifest.case_results if row.get("status") == "processed"]
+    assert len(processed) == 1
+    assert processed[0]["case_id"] == "STA_01-003"
+    assert processed[0]["tff_join_status"] == "filtered_known_exclusion"
+    assert processed[0]["tff_exclusion_class"] == "rct_stanford_sta"
+    assert "tff_filtered_known_exclusions" in manifest.artifact_paths
+    assert Path(manifest.artifact_paths["tff_filtered_known_exclusions"]).exists()

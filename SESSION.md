@@ -730,3 +730,100 @@ Next recommended step:
 1. run one controlled real-data pass with `--enable-tff-adapter` and inspect `tff_case_join.csv` coverage;
 2. decide policy for downstream use of `tff_parse_status=partial|unresolved` rows;
 3. keep adapter read-only until parity acceptance for any timing-field usage is approved.
+
+## TFF Adapter Real-Data Validation Pass (2026-03-13)
+
+Validation run executed on:
+
+- site path: `C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - Stanford_064`
+- output: `run_outputs_tff_adapter_validation_20260313_stanford`
+- adapter input: `run_outputs/tff_audit/tff_normalized_case_table.csv`
+
+Primary command used:
+
+- `.\.venv\Scripts\python.exe -m site_timing_analysis.first_slice_cli --site Stanford_064 --years All --root "C:\Users\NicholasSisco\Profound Medical" --site-path "C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - Stanford_064" --output "C:\Users\NicholasSisco\Documents\GitHub\Site_timing_analysis\run_outputs_tff_adapter_validation_20260313_stanford" --diagnostics --enable-tff-adapter --tff-normalized-case-table "C:\Users\NicholasSisco\Documents\GitHub\Site_timing_analysis\run_outputs\tff_audit\tff_normalized_case_table.csv"`
+
+Run outcome:
+
+- discovered: `141`
+- processed: `140`
+- failed: `0`
+
+Adapter join quality (processed cases):
+
+- matched: `135/140` (`96.43%`)
+- no TFF match: `5` (`STA_01-003`, `STA_01-004`, `STA_01-005`, `STA_01-006`, `STA_01-008`)
+- source-table unresolved/soft-fail ID rows: `273` (missing/non-canonical canonical ID rows in bounded TFF table)
+
+Timing provenance signals on matched rows:
+
+- corrected-time prevalence: `105/135` (`77.78%`)
+- unresolved timing prevalence: `0/135` (`0.00%`)
+- parse-status distribution: `ok=84`, `partial=39`, `blank=12`, `unresolved=0`
+
+Chronology sanity (7 validated workflow fields):
+
+- monotonic-order violations after correction: `0` on matched rows with available minute values
+
+High-level comparison against pipeline timing spans (heuristic):
+
+- comparable matched cases: `123`
+- `confirmatory`: `28`
+- `additive`: `81`
+- `conflicting`: `14`
+
+Interpretation:
+
+- TFF layer is primarily additive/confirmatory in this pass.
+- conflicting span cases are concentrated where pipeline timestamp ranges are known to be inflated by sparse trailing events/day-jump effects; treat as review-required rather than immediate replacement candidates.
+- adapter remains suitable as read-only provenance enrichment.
+
+Artifacts reviewed:
+
+- `run_outputs_tff_adapter_validation_20260313_stanford/tff_adapter/tff_case_join.csv`
+- `run_outputs_tff_adapter_validation_20260313_stanford/tff_adapter/tff_integration_summary.md`
+- `run_outputs_tff_adapter_validation_20260313_stanford/tff_adapter_validation_review.md`
+
+Recommended next slice:
+
+1. keep adapter read-only;
+2. add a narrow comparison/audit report layer that highlights only `conflicting` TFF-vs-pipeline cases for manual review;
+3. defer any timing-value substitution until case-level parity acceptance criteria are defined.
+
+## TFF Known-Exclusion Filtering Added (2026-03-13)
+
+Objective addressed:
+
+- treat known Stanford RCT case IDs (`STA_01-003` through `STA_01-008`) as optional exclusion candidates in the TFF adapter validation/join path, rather than ordinary unmatched cases.
+
+Implementation scope:
+
+- adapter remains read-only
+- no timing/state/interval logic changes
+- optional CLI/config flag added: `--tff-filter-known-exclusions` (default: off)
+
+Behavior when enabled:
+
+- known exclusion matches are marked with:
+  - `tff_join_status=filtered_known_exclusion`
+  - `tff_exclusion_class=rct_stanford_sta`
+  - `tff_exclusion_rule=known_stanford_rct_case_pattern:^STA_01-00[3-8]$`
+  - `tff_exclusion_reason=known_exclusion_case_class`
+- filtered rows are excluded from join-quality unmatched metrics
+- explicit filtered-case audit export is written:
+  - `tff_adapter/tff_filtered_known_exclusions.csv`
+- integration summary now distinguishes:
+  - matched
+  - filtered known exclusions
+  - true unmatched pipeline cases
+
+Validation:
+
+- focused adapter tests updated for optional filtering + audit outputs
+- full suite pass: `78 passed`
+
+Next recommended step:
+
+1. run one adapter-enabled validation pass with `--tff-filter-known-exclusions` on target sites where RCT-style IDs may appear;
+2. review `tff_filtered_known_exclusions.csv` as a manual QA checkpoint;
+3. keep this rule table explicit and extend only with reviewed known-exclusion classes.

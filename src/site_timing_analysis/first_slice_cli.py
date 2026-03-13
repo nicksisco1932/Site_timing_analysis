@@ -391,6 +391,7 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
             case_results=case_results,
             output_dir=config.output_dir,
             tff_case_table=config.tff_normalized_case_table,
+            filter_known_exclusions=config.tff_filter_known_exclusions,
         )
         warnings.extend(tff_warnings)
 

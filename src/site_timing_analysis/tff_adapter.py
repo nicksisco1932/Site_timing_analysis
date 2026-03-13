@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,14 @@ _WORKFLOW_TIMING_LABELS: dict[str, str] = {
     "patient_transfer_recovery": "Patient Transfer to Recovery room",
 }
 
+_KNOWN_EXCLUSION_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    (
+        "rct_stanford_sta",
+        "known_stanford_rct_case_pattern:^STA_01-00[3-8]$",
+        re.compile(r"^STA_01-00[3-8]$"),
+    ),
+)
+
 
 @dataclass(slots=True)
 class _TFFJoinedCase:
@@ -35,6 +44,12 @@ class _TFFJoinedCase:
     correction_type: str
     parse_status: str
     timing_payload: dict[str, str]
+
+
+@dataclass(slots=True)
+class _KnownExclusionMatch:
+    exclusion_class: str
+    exclusion_rule: str
 
 
 def default_tff_case_table_path(output_dir: Path) -> Path:
@@ -122,6 +137,19 @@ def _build_joined_tff_case(row: dict[str, str]) -> _TFFJoinedCase:
     )
 
 
+def _match_known_exclusion(case_id: str) -> _KnownExclusionMatch | None:
+    normalized = str(case_id or "").strip().upper()
+    if not normalized:
+        return None
+    for exclusion_class, exclusion_rule, pattern in _KNOWN_EXCLUSION_RULES:
+        if pattern.fullmatch(normalized):
+            return _KnownExclusionMatch(
+                exclusion_class=exclusion_class,
+                exclusion_rule=exclusion_rule,
+            )
+    return None
+
+
 def _load_tff_cases(tff_case_table: Path) -> tuple[dict[str, _TFFJoinedCase], dict[str, int], list[str]]:
     stats = {
         "rows_total": 0,
@@ -174,6 +202,30 @@ def _load_tff_cases(tff_case_table: Path) -> tuple[dict[str, _TFFJoinedCase], di
     return cases_by_id, stats, warnings
 
 
+def _write_filtered_known_exclusions_csv(
+    *,
+    filtered_rows: list[dict[str, Any]],
+    output_dir: Path,
+) -> Path:
+    out_dir = output_dir / "tff_adapter"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "tff_filtered_known_exclusions.csv"
+    fieldnames = [
+        "case_id",
+        "status",
+        "tff_join_status",
+        "tff_exclusion_class",
+        "tff_exclusion_rule",
+        "tff_exclusion_reason",
+    ]
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in filtered_rows:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
+    return out_path
+
+
 def _write_joined_case_dataset(
     *,
     joined_rows: list[dict[str, Any]],
@@ -215,10 +267,13 @@ def _write_integration_summary(
     output_dir: Path,
     tff_case_table: Path,
     stats: dict[str, int],
-    pipeline_case_count: int,
+    pipeline_case_rows_total: int,
+    pipeline_case_rows_considered: int,
     matched_count: int,
-    unmatched_pipeline_count: int,
+    filtered_known_exclusions_count: int,
+    true_unmatched_pipeline_count: int,
     unmatched_tff_count: int,
+    known_exclusion_filter_enabled: bool,
 ) -> Path:
     out_dir = output_dir / "tff_adapter"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -228,9 +283,12 @@ def _write_integration_summary(
         "# TFF Read-Only Adapter Summary",
         "",
         f"- tff_normalized_case_table: `{tff_case_table}`",
-        f"- pipeline case rows considered: `{pipeline_case_count}`",
+        f"- known exclusion filter enabled: `{known_exclusion_filter_enabled}`",
+        f"- pipeline case rows total: `{pipeline_case_rows_total}`",
+        f"- pipeline case rows considered for join-quality metrics: `{pipeline_case_rows_considered}`",
         f"- matched by canonical case_id: `{matched_count}`",
-        f"- pipeline cases without TFF match: `{unmatched_pipeline_count}`",
+        f"- filtered known exclusions: `{filtered_known_exclusions_count}`",
+        f"- true unmatched pipeline cases: `{true_unmatched_pipeline_count}`",
         f"- TFF cases without pipeline match: `{unmatched_tff_count}`",
         "",
         "## TFF Table Intake",
@@ -263,6 +321,7 @@ def apply_read_only_tff_adapter(
     case_results: list[dict[str, Any]],
     output_dir: Path,
     tff_case_table: Path | None,
+    filter_known_exclusions: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
     """
     Join bounded TFF normalized metadata onto case-level results by canonical case_id.
@@ -281,6 +340,7 @@ def apply_read_only_tff_adapter(
     tff_cases, tff_stats, warnings = _load_tff_cases(resolved_tff_table)
     updated_results: list[dict[str, Any]] = []
     matched_case_ids: set[str] = set()
+    filtered_known_exclusion_rows: list[dict[str, Any]] = []
 
     for case_result in case_results:
         row = dict(case_result)
@@ -289,6 +349,26 @@ def apply_read_only_tff_adapter(
             row["tff_join_status"] = "no_case_id"
             updated_results.append(row)
             continue
+
+        if filter_known_exclusions:
+            known_exclusion = _match_known_exclusion(case_id)
+            if known_exclusion is not None:
+                row["tff_join_status"] = "filtered_known_exclusion"
+                row["tff_exclusion_class"] = known_exclusion.exclusion_class
+                row["tff_exclusion_rule"] = known_exclusion.exclusion_rule
+                row["tff_exclusion_reason"] = "known_exclusion_case_class"
+                filtered_known_exclusion_rows.append(
+                    {
+                        "case_id": case_id,
+                        "status": str(row.get("status", "")),
+                        "tff_join_status": row["tff_join_status"],
+                        "tff_exclusion_class": row["tff_exclusion_class"],
+                        "tff_exclusion_rule": row["tff_exclusion_rule"],
+                        "tff_exclusion_reason": row["tff_exclusion_reason"],
+                    }
+                )
+                updated_results.append(row)
+                continue
 
         joined = tff_cases.get(case_id)
         if joined is None:
@@ -305,19 +385,28 @@ def apply_read_only_tff_adapter(
         row.update(joined.timing_payload)
         updated_results.append(row)
 
-    pipeline_case_ids = {
-        str(row.get("case_id", "")).strip()
-        for row in case_results
-        if str(row.get("case_id", "")).strip()
-    }
-    unmatched_pipeline_count = sum(
+    pipeline_case_rows_total = sum(
+        1 for row in updated_results if str(row.get("case_id", "")).strip()
+    )
+    filtered_known_exclusions_count = len(filtered_known_exclusion_rows)
+    pipeline_case_rows_considered = pipeline_case_rows_total - filtered_known_exclusions_count
+
+    true_unmatched_pipeline_count = sum(
         1 for row in updated_results if str(row.get("tff_join_status", "")) == "no_tff_match"
     )
-    unmatched_tff_count = len(set(tff_cases.keys()) - pipeline_case_ids)
+    eligible_pipeline_case_ids = {
+        str(row.get("case_id", "")).strip()
+        for row in updated_results
+        if str(row.get("case_id", "")).strip()
+        and str(row.get("tff_join_status", "")) != "filtered_known_exclusion"
+    }
+    unmatched_tff_count = len(set(tff_cases.keys()) - eligible_pipeline_case_ids)
     matched_count = len(matched_case_ids)
 
-    if unmatched_pipeline_count > 0:
-        warnings.append(f"tff_adapter:pipeline_cases_without_tff:{unmatched_pipeline_count}")
+    if filtered_known_exclusions_count > 0:
+        warnings.append(f"tff_adapter:known_exclusions_filtered:{filtered_known_exclusions_count}")
+    if true_unmatched_pipeline_count > 0:
+        warnings.append(f"tff_adapter:pipeline_cases_without_tff:{true_unmatched_pipeline_count}")
     if unmatched_tff_count > 0:
         warnings.append(f"tff_adapter:tff_cases_without_pipeline_match:{unmatched_tff_count}")
 
@@ -340,18 +429,29 @@ def apply_read_only_tff_adapter(
     ]
 
     joined_path = _write_joined_case_dataset(joined_rows=joined_rows, output_dir=output_dir)
+    filtered_path: Path | None = None
+    if filter_known_exclusions:
+        filtered_path = _write_filtered_known_exclusions_csv(
+            filtered_rows=filtered_known_exclusion_rows,
+            output_dir=output_dir,
+        )
     summary_path = _write_integration_summary(
         output_dir=output_dir,
         tff_case_table=resolved_tff_table,
         stats=tff_stats,
-        pipeline_case_count=len(pipeline_case_ids),
+        pipeline_case_rows_total=pipeline_case_rows_total,
+        pipeline_case_rows_considered=pipeline_case_rows_considered,
         matched_count=matched_count,
-        unmatched_pipeline_count=unmatched_pipeline_count,
+        filtered_known_exclusions_count=filtered_known_exclusions_count,
+        true_unmatched_pipeline_count=true_unmatched_pipeline_count,
         unmatched_tff_count=unmatched_tff_count,
+        known_exclusion_filter_enabled=filter_known_exclusions,
     )
 
     artifacts = {
         "tff_case_join": str(joined_path),
         "tff_integration_summary": str(summary_path),
     }
+    if filtered_path is not None:
+        artifacts["tff_filtered_known_exclusions"] = str(filtered_path)
     return updated_results, artifacts, warnings
