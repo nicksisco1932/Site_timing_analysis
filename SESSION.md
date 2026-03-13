@@ -483,3 +483,113 @@ Known anticipated issue:
 - prefer the smallest forward correction that restores plausible order, prioritizing `+12h`, with `+24h` only when justified
 - all corrections and unresolved ambiguities must be surfaced in audit outputs
 - unresolved ambiguities must soft-fail and not terminate ingestion
+
+## TFF Audit First Pass (2026-03-13)
+
+Input workbook audited:
+
+- `C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - WIP new TFF process\Treatment Feedback Forms Output.xlsx`
+
+Audit artifacts generated:
+
+- `run_outputs/tff_audit/sheet_inventory.csv`
+- `run_outputs/tff_audit/column_inventory.csv`
+- `run_outputs/tff_audit/completeness_summary.csv`
+- `run_outputs/tff_audit/site_value_summary.csv`
+- `run_outputs/tff_audit/case_id_quality_summary.csv`
+- `run_outputs/tff_audit/case_id_suspicious_examples.csv`
+- `run_outputs/tff_audit/candidate_timing_columns.csv`
+- `run_outputs/tff_audit/timing_ambiguity_probe.csv`
+- `run_outputs/tff_audit/tff_audit_summary.md`
+
+Key findings:
+
+- Workbook contains 11 sheets; one sheet (`Sheet1`) is extremely wide (16,373 columns) and likely contains noisy/merged export structure that needs controlled schema handling.
+- Heuristic field discovery found site-like columns, case-ID-like columns, and timing-like columns, but also false positives; role-specific column selection must be constrained in implementation.
+- `Sheet2::PatientID` is the strongest case-ID candidate (`97.16%` canonical pattern match), with non-canonical variants that require normalization rules.
+- Site labels are text-heavy institution names and require deterministic normalization/mapping to analysis site IDs.
+- AM/PM ambiguity is material: 15,845 ambiguous clock-only values (`1:00`-style), versus 1 explicit AM/PM value.
+- Sequence probe found 189 naive non-monotonic rows; 186 were repairable with `+12h`, 4 required `+24h`, and 0 were unresolved in the probe set.
+
+Recommended next implementation slice:
+
+1. Build a dedicated TFF ingestion-audit module (no integration into timing pipeline yet).
+2. Implement deterministic site-label normalization and mapping reports.
+3. Implement case-ID canonicalization/alignment with soft-fail outputs for unmatched or ambiguous cases.
+4. Implement ordered event-time correction using smallest-forward logic (`+12h` preferred, `+24h` fallback) with per-cell correction audit columns.
+5. Export corrected and unresolved timing audit artifacts as the gating output before any timeline integration.
+
+## TFF Bounded Re-Audit Correction (2026-03-13)
+
+Course correction applied:
+
+- Treat `Sheet1!A:BK` as the authoritative bounded source for near-term TFF ingestion planning.
+- Treat columns beyond `BK` as spreadsheet/export noise; exclude them from schema planning.
+
+Bounded re-audit outputs added:
+
+- `run_outputs/tff_audit/sheet1_a_bk_header_inventory.csv`
+- `run_outputs/tff_audit/sheet1_a_bk_populated_columns.csv`
+- `run_outputs/tff_audit/sheet1_a_bk_candidate_columns.csv`
+- `run_outputs/tff_audit/sheet1_a_bk_case_id_quality.csv`
+- `run_outputs/tff_audit/sheet1_a_bk_generated_treatment_id_summary.csv`
+- `run_outputs/tff_audit/sheet1_a_bk_generated_treatment_id_noncanonical_examples.csv`
+- `run_outputs/tff_audit/sheet1_a_bk_bounded_audit_summary.md`
+
+Bounded findings:
+
+- `Sheet1!A:BK` contains 63 populated columns across 3,415 rows and covers the operationally meaningful TFF fields.
+- Best bounded primary case-ID field is `Generated Treatment ID` with high canonical coverage (`94.01%`, 3,140/3,340 canonical).
+- `Sheet1!A:BK` is sufficient as primary identifier source for the next slice, with soft-fail normalization required for non-canonical residuals.
+- `Sheet2::PatientID` remains useful as a secondary fallback/reference field for unresolved ID normalization edge cases.
+
+## TFF Bounded Normalization/Export Slice Implemented (2026-03-13)
+
+Implemented module:
+
+- `src/site_timing_analysis/tff_bounded.py`
+  - loads only `Sheet1!A:BK` (with bounded fallback for short test workbooks)
+  - uses `Generated Treatment ID` as primary case ID
+  - uses `Sheet2::PatientID` as secondary fallback/reference for alignment checks
+  - canonicalizes case IDs with deterministic soft-fail statuses
+  - builds deterministic site-label normalization outputs
+  - identifies timing columns in bounded scope
+  - applies sequence-aware monotonic repair (`+12h` preferred, `+24h` fallback)
+  - exports bounded normalization and audit artifacts without integrating into state-interval pipeline
+  - includes standalone CLI entry via `python -m site_timing_analysis.tff_bounded`
+
+Validation:
+
+- Added tests: `tests/test_tff_bounded_slice.py`
+- Full suite pass: `72 passed`
+
+Generated artifacts (bounded normalization layer):
+
+- `run_outputs/tff_audit/tff_normalized_case_table.csv`
+- `run_outputs/tff_audit/tff_case_id_alignment_report.csv`
+- `run_outputs/tff_audit/tff_site_mapping_report.csv`
+- `run_outputs/tff_audit/tff_time_correction_audit_report.csv`
+- `run_outputs/tff_audit/tff_unresolved_soft_fail_report.csv`
+- `run_outputs/tff_audit/tff_timing_column_report.csv`
+- `run_outputs/tff_audit/tff_bounded_normalization_summary.md`
+
+Current bounded-run signals:
+
+- normalized case rows: `3415`
+- case-ID soft-fail rows: `273`
+- `+12h` timing corrections: `7784`
+- `+24h` timing corrections: `99`
+- unresolved timing corrections: `3`
+
+Assumptions used in this slice:
+
+- Sequence corrections are applied in workflow order, not as independent timestamps.
+- Smallest-forward correction is deterministic: try `+12h`, then `+24h`, otherwise unresolved soft-fail.
+- No integration into the existing timing/state pipeline yet; this is a pre-integration normalization layer only.
+
+Recommended next step:
+
+1. review/approve unresolved soft-fail policy (`273` ID soft-fail rows, `3` unresolved timing rows);
+2. finalize site-label mapping table to analysis site IDs;
+3. add optional secondary-ID-assisted recovery path for unresolved `Generated Treatment ID` rows;
+4. only then wire bounded TFF outputs into downstream timeline enrichment.
