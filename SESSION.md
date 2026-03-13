@@ -462,3 +462,24 @@ Instead:
 1. incorporate this catalog design into the planning/docs/TODO structure
 2. recommend how the future multi-site ingestion layer should use it
 3. keep the design aligned with a filesystem curated store plus SQLite metadata catalog
+
+### TODO: TFF spreadsheet ingestion and audit
+
+Ingest `Treatment Feedback Forms Output.xlsx` as a secondary metadata source for timeline analysis.
+
+Planned work:
+
+- audit workbook structure and sheet contents
+- identify candidate columns for case ID, site, timing variables, and other potentially useful metadata
+- build a normalized site lookup so spreadsheet site labels can be mapped to analysis site IDs
+- implement case ID alignment against pipeline case IDs with soft-fail behavior for discontinuities, unmatched cases, and ambiguous mappings
+- export audit artifacts, including column inventory, completeness, unique values, duplicate case IDs, site value counts, and candidate timing columns
+- parse non-timing metadata that may be useful later, even if not immediately used in timing analysis
+
+Known anticipated issue:
+
+- some afternoon times may be entered as `1:00` instead of `13:00`
+- TFF time parsing should enforce expected event order and repair likely AM/PM ambiguity using deterministic monotonic sequence logic
+- prefer the smallest forward correction that restores plausible order, prioritizing `+12h`, with `+24h` only when justified
+- all corrections and unresolved ambiguities must be surfaced in audit outputs
+- unresolved ambiguities must soft-fail and not terminate ingestion

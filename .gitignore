@@ -17,6 +17,7 @@ dist/
 
 # Generated run artifacts
 run_outputs/
+run_outputs*/
 manifests/
 test_output/
 
