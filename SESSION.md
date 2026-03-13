@@ -827,3 +827,57 @@ Next recommended step:
 1. run one adapter-enabled validation pass with `--tff-filter-known-exclusions` on target sites where RCT-style IDs may appear;
 2. review `tff_filtered_known_exclusions.csv` as a manual QA checkpoint;
 3. keep this rule table explicit and extend only with reviewed known-exclusion classes.
+
+## Hardware Lookup Foundation Implemented (2026-03-13)
+
+Objective addressed:
+
+- built a prioritized hardware-query lookup layer for `local.db` ingestion to support case-level hardware questions without manual SQL.
+
+Implementation:
+
+- new module: `src/site_timing_analysis/hardware_lookup.py`
+- typed error added: `HardwareLookupError` in `src/site_timing_analysis/errors.py`
+- new tests: `tests/test_hardware_lookup.py`
+
+Normalized lookup schema (SQLite):
+
+- `ingest_batches`
+- `ingested_cases`
+- `source_table_inventory`
+- `case_treatment_context`
+- `hardware_identifiers`
+- `case_device_metrics`
+- `case_hardware_summary`
+
+Core capabilities:
+
+- ingest one or more `local.db` files (explicit `--case-db` and/or recursive `--site-root`)
+- preserve case/session/treatment linkage and source provenance (`source_table`, `source_field`, `source_row_id`)
+- materialize case-level hardware summary answer with direct vs inferred status
+- soft-fail behavior for missing answers
+- query interface for first required question:
+  - “What was the serial number of the PS cable used for this case?”
+  - direct field priority: PS cable serial fields when present
+  - inferred fallback: `PSSerialNumber` / `PSSerial`
+
+CLI entrypoints:
+
+- ingest:
+  - `python -m site_timing_analysis.hardware_lookup ingest ...`
+- query:
+  - `python -m site_timing_analysis.hardware_lookup query --question ps-cable-serial ...`
+
+Validation:
+
+- new tests passed; full suite: `81 passed`
+- sample ingest/query executed on `test_data/local.db`:
+  - batch id: `testdata_20260313`
+  - generated artifacts under `run_outputs/hardware_lookup_testdata_20260313/`
+  - inferred PS-cable answer for case `064_01-137`: `MH9581` (from `Treatments.PSSerialNumber`, with provenance candidates)
+
+Next recommended step:
+
+1. define additional structured question keys (PS serial by treatment, UA test result linkage, pressure/amplifier summaries);
+2. run multi-case ingestion on one site root and review duplicate/consistency handling;
+3. decide whether this lookup DB remains SQLite-only or gets mirrored to catalog-backed multi-site metadata in later roadmap.

@@ -77,3 +77,7 @@ class TimingLogParseError(SiteTimingError):
 
 class EnrichmentError(SiteTimingError):
     """Raised when enrichment cannot be completed safely for a case."""
+
+
+class HardwareLookupError(SiteTimingError):
+    """Raised when hardware lookup ingestion or query operations fail."""
