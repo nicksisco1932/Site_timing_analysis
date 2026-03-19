@@ -45,6 +45,7 @@ _DIAGNOSTIC_FLAGS = (
     "interval_truncated_large_gap",
     "interval_terminal_state_clamped",
     "interval_early_state_truncated",
+    "interval_session_synthetic_truncated",
     "interval_unassigned_state_truncated",
     "negative_rebased_start",
 )

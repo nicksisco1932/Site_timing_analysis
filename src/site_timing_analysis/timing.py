@@ -72,6 +72,10 @@ def _is_early_sensitive_state(state: str | None) -> bool:
     return _normalized_state(state) in _EARLY_SENSITIVE_STATES
 
 
+def _is_session_synthetic_event(event: StateLabeledEvent) -> bool:
+    return event.is_synthetic and event.source == "sessions"
+
+
 def _first_index(events: list[StateLabeledEvent], event_type: str) -> int | None:
     for idx, event in enumerate(events):
         if event.event_type == event_type:
@@ -254,12 +258,13 @@ def compute_state_intervals(
                 is_unassigned_state = _is_unassigned_state(event.state)
                 is_terminal_state = _is_terminal_sensitive_state(event.state)
                 is_early_state = _is_early_sensitive_state(event.state)
+                is_session_synthetic = _is_session_synthetic_event(event)
                 large_gap = raw_duration_sec > _LARGE_GAP_THRESHOLD_SEC
                 goes_past_case_end = next_event.timestamp > case_end_timestamp
                 sparse_carry_forward = (
                     event.state_assignment_rule in _EARLY_STATE_LONG_GAP_RULES
                     or event.event_type in _EARLY_STATE_LONG_GAP_EVENT_TYPES
-                    or (event.is_synthetic and event.source == "sessions")
+                    or is_session_synthetic
                 )
 
                 if goes_past_case_end and (is_unassigned_state or is_terminal_state):
@@ -270,6 +275,17 @@ def compute_state_intervals(
                         quality_flags.append("interval_terminal_state_clamped")
                     if is_unassigned_state:
                         quality_flags.append("interval_unassigned_state_truncated")
+
+                if large_gap and is_session_synthetic:
+                    # Session-derived synthetic timestamps are sparse markers, not
+                    # evidence that the synthetic state should span multi-hour/day gaps.
+                    cap_timestamp = event.timestamp + timedelta(seconds=_LARGE_GAP_THRESHOLD_SEC)
+                    if case_end_timestamp > event.timestamp and case_end_timestamp < cap_timestamp:
+                        cap_timestamp = case_end_timestamp
+                    if cap_timestamp < effective_end_timestamp:
+                        effective_end_timestamp = cap_timestamp
+                        quality_flags.append("interval_session_synthetic_truncated")
+                        quality_flags.append("interval_truncated_large_gap")
 
                 if large_gap and is_early_state and sparse_carry_forward:
                     cap_timestamp = event.timestamp + timedelta(seconds=_LARGE_GAP_THRESHOLD_SEC)
@@ -316,6 +332,13 @@ def compute_state_intervals(
                             f"{case_id}:interval_early_state_truncated:row={event.row_number}:"
                             f"event_type={event.event_type}:state={state_label}:"
                             f"raw_duration_sec={raw_duration_sec}:duration_sec={duration_sec}"
+                        )
+                    if "interval_session_synthetic_truncated" in quality_flags:
+                        warnings.append(
+                            f"{case_id}:interval_session_synthetic_truncated:row={event.row_number}:"
+                            f"event_type={event.event_type}:state={state_label}:"
+                            f"source_detail={event.source_detail}:raw_duration_sec={raw_duration_sec}:"
+                            f"duration_sec={duration_sec}"
                         )
         else:
             duration_sec = 0.0

@@ -478,6 +478,7 @@ def test_build_run_diagnostics_counts_thresholds_and_quality_flags(tmp_path: Pat
         warnings=[
             "064_01-001:interval_truncated_large_gap:row=1",
             "064_01-001:interval_early_state_truncated:row=2",
+            "064_01-001:interval_session_synthetic_truncated:row=None",
             "064_01-002:interval_negative_rebased_start:row=3",
         ],
         case_results=[],
@@ -492,7 +493,11 @@ def test_build_run_diagnostics_counts_thresholds_and_quality_flags(tmp_path: Pat
             case_id="064_01-001",
             ts="2025-01-01 10:02:00",
             duration_sec=8001.0,
-            flags=["interval_truncated_large_gap", "negative_rebased_start"],
+            flags=[
+                "interval_truncated_large_gap",
+                "interval_session_synthetic_truncated",
+                "negative_rebased_start",
+            ],
         ),
         _interval(
             case_id="064_01-002",
@@ -524,6 +529,7 @@ def test_build_run_diagnostics_counts_thresholds_and_quality_flags(tmp_path: Pat
     assert flags["interval_truncated_large_gap"] == 1
     assert flags["interval_terminal_state_clamped"] == 1
     assert flags["interval_early_state_truncated"] == 1
+    assert flags["interval_session_synthetic_truncated"] == 1
     assert flags["interval_unassigned_state_truncated"] == 1
     assert flags["negative_rebased_start"] == 1
 

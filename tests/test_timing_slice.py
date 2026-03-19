@@ -157,6 +157,35 @@ def test_unassigned_state_interval_is_truncated_and_flagged() -> None:
     assert "interval_truncated_large_gap" in unassigned.quality_flags
 
 
+def test_session_synthetic_large_gap_is_truncated_and_flagged() -> None:
+    events = [
+        _event(
+            ts="2025-01-01 09:00:00",
+            event_type="DeviceInsertionEnds",
+            row=None,
+            state="Device insertion",
+            source="sessions",
+            is_synthetic=True,
+            source_detail="Sessions.TimeUaInsertedAt",
+            insertion_rule="session_field_map_v1",
+            state_assignment_rule="map_device_insertion",
+        ),
+        _event(
+            ts="2025-01-06 09:00:00",
+            event_type="AlignmentWorkflowRecord",
+            row=2,
+            state="Alignment",
+        ),
+    ]
+    intervals, warnings = compute_state_intervals(events)
+
+    hardened = intervals[0]
+    assert hardened.duration_sec == 7200.0
+    assert "interval_session_synthetic_truncated" in hardened.quality_flags
+    assert "interval_truncated_large_gap" in hardened.quality_flags
+    assert any("interval_session_synthetic_truncated" in warning for warning in warnings)
+
+
 def test_normal_non_outlier_intervals_are_preserved_without_hardening_flags() -> None:
     events = [
         _event(ts="2025-01-01 09:00:00", event_type="SetupWorkflowRecord", row=1, state="Room ready"),
