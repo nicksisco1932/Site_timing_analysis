@@ -18,12 +18,29 @@ Outputs PNGs into --outdir.
 """
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 
+import matplotlib
 import pandas as pd
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from .tulsa_workflow import PLOTTED_STATES, STATE_COLORS
+
+
+DEVICE_INSERTION_STATE = "Device insertion"
+_GANTT_START_TOLERANCE_MIN = 1e-9
+
+
+@dataclass(frozen=True)
+class GanttPreparation:
+    """Prepared rebased rows and eligibility details for the patient Gantt plot."""
+
+    rows: pd.DataFrame
+    plotted_pts: list[str]
+    skipped_pts: list[str]
 
 
 def parse_args():
@@ -182,6 +199,85 @@ def plot_histograms(df: pd.DataFrame, outdir: Path, site_label: str | None):
         print(f"[PLOT] Saved histogram for {col}: {outfile}")
 
 
+def validate_device_insertion_rebase(gantt_df: pd.DataFrame) -> None:
+    """
+    Confirm that each eligible case is rebased to Device insertion start = 0.
+
+    Input:
+        Rebased Gantt rows with ``PtId``, ``CurrentState``, and ``start_min``.
+    Output:
+        No return value; raises ``ValueError`` if any eligible case is mis-anchored.
+    Assumptions:
+        Eligible cases are those that retain at least one positive-duration
+        ``Device insertion`` segment after filtering.
+    """
+    insertion_rows = gantt_df[gantt_df["CurrentState"] == DEVICE_INSERTION_STATE]
+    if insertion_rows.empty:
+        return
+
+    starts = insertion_rows.groupby("PtId", sort=True)["start_min"].min()
+    bad = starts[starts.abs() > _GANTT_START_TOLERANCE_MIN]
+    if bad.empty:
+        return
+
+    details = ", ".join(f"{pt}={bad.at[pt]:.6f}" for pt in bad.index)
+    raise ValueError(
+        "Device insertion rebase validation failed for plotted cases: "
+        f"{details}"
+    )
+
+
+def prepare_gantt_rows(states_df: pd.DataFrame, max_pts: int = 60) -> GanttPreparation:
+    """
+    Prepare rebased Gantt rows anchored to Device insertion.
+
+    Input:
+        State-level rows with ``PtId``, ``CurrentState``, ``start_sec``, and
+        ``duration_sec`` columns.
+    Output:
+        Rebasing-ready rows plus plotted/skipped case identifiers.
+    Assumptions:
+        Cases without a positive-duration ``Device insertion`` segment are skipped
+        explicitly rather than being silently anchored to another state.
+    """
+    df = states_df.copy()
+    df["PtId"] = df["PtId"].astype(str)
+    df["CurrentState"] = df["CurrentState"].fillna("").astype(str).str.strip()
+    df["start_sec"] = pd.to_numeric(df["start_sec"], errors="coerce")
+    df["duration_sec"] = pd.to_numeric(df["duration_sec"], errors="coerce")
+
+    df = df[df["CurrentState"] != ""]
+    df = df[df["start_sec"].notna()]
+    df = df[df["duration_sec"].notna()]
+    df = df[df["duration_sec"] > 0].copy()
+
+    pts = sorted(df["PtId"].unique())
+    if len(pts) > max_pts:
+        pts = pts[:max_pts]
+        df = df[df["PtId"].isin(pts)].copy()
+
+    if not pts:
+        return GanttPreparation(df, [], [])
+
+    anchor_starts = (
+        df[df["CurrentState"] == DEVICE_INSERTION_STATE]
+        .groupby("PtId", sort=True)["start_sec"]
+        .min()
+    )
+    plotted_pts = [pt for pt in pts if pt in anchor_starts.index]
+    skipped_pts = [pt for pt in pts if pt not in anchor_starts.index]
+
+    if not plotted_pts:
+        return GanttPreparation(df.iloc[0:0].copy(), [], skipped_pts)
+
+    df = df[df["PtId"].isin(plotted_pts)].copy()
+    df["start_min"] = (df["start_sec"] - df["PtId"].map(anchor_starts)) / 60.0
+    df["dur_min"] = df["duration_sec"] / 60.0
+
+    validate_device_insertion_rebase(df)
+    return GanttPreparation(df, plotted_pts, skipped_pts)
+
+
 def plot_gantt_from_states(
     states_df: pd.DataFrame, outdir: Path, site_label: str | None, max_pts: int = 60
 ):
@@ -189,29 +285,24 @@ def plot_gantt_from_states(
     Gantt-style plot across patients.
 
     y-axis: PtId
-    x-axis: minutes from first event in that case
+    x-axis: minutes rebased to Device insertion start for each case
     color: workflow state (CurrentState)
     """
 
-    df = states_df.copy()
+    prepared = prepare_gantt_rows(states_df, max_pts=max_pts)
+    if prepared.skipped_pts:
+        skipped_text = ", ".join(prepared.skipped_pts)
+        print(
+            "[WARN] Skipping cases without Device insertion for normalized Gantt: "
+            f"{skipped_text}"
+        )
 
-    # Keep only events that belong to a named workflow state and have positive duration
-    df = df[df["CurrentState"].astype(str) != ""]
-    df = df[df["duration_sec"] > 0]
+    if not prepared.plotted_pts:
+        print("[WARN] No patients with Device insertion available for Gantt plot.")
+        return {"plotted_pts": [], "skipped_pts": prepared.skipped_pts}
 
-    # Convert seconds to minutes
-    df["start_min"] = df["start_sec"] / 60.0
-    df["dur_min"] = df["duration_sec"] / 60.0
-
-    # Limit number of patients to keep the figure readable
-    pts = sorted(df["PtId"].unique())
-    if len(pts) > max_pts:
-        pts = pts[:max_pts]
-        df = df[df["PtId"].isin(pts)]
-
-    if not pts:
-        print("[WARN] No patients available for Gantt plot.")
-        return
+    df = prepared.rows
+    pts = prepared.plotted_pts
 
     # Map PtId to y positions
     pt_to_y = {pt: ii for ii, pt in enumerate(pts)}
@@ -249,7 +340,7 @@ def plot_gantt_from_states(
 
     ax.set_yticks(range(len(pts)))
     ax.set_yticklabels(pts, fontsize=6)
-    ax.set_xlabel("Minutes from first TULSA event")
+    ax.set_xlabel("Minutes from Device insertion start")
     title = "Workflow timeline by patient"
     if site_label:
         title += f" – {site_label}"
@@ -263,6 +354,8 @@ def plot_gantt_from_states(
     fig.savefig(outfile, dpi=200)
     plt.close(fig)
     print(f"[PLOT] Saved Gantt-style timeline: {outfile}")
+    print(f"[PLOT] Normalized Gantt cases plotted: {', '.join(prepared.plotted_pts)}")
+    return {"plotted_pts": prepared.plotted_pts, "skipped_pts": prepared.skipped_pts}
 
 
 def main():

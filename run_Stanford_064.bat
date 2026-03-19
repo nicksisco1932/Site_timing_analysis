@@ -8,7 +8,7 @@ REM ------------------------------------------------------------------
 set SITE=Stanford_064
 set SITE_LABEL=Stanford
 set YEARS=All
-set DATE=20251119
+set DATE=2025.11.19
 
 set ANALYSIS_ROOT=C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\Analysis
 
@@ -24,7 +24,7 @@ echo   TULSA SITE TIMING PIPELINE (Python)
 echo   Site:       %SITE%
 echo   Years:      %YEARS%
 echo   Date:       %DATE%
-echo   Output dir: %ANALYSIS_ROOT%\%DATE%_%SITE_LABEL%
+echo   Output dir: %ANALYSIS_ROOT%\%DATE%_%SITE%_timing_Gantt
 echo ================================================================
 echo.
 

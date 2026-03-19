@@ -25,7 +25,7 @@ Steps
 Outputs
 -------
 Analysis root:
-    <analysis_root>/<DATE>_<SITE_LABEL>/
+    <analysis_root>/<YYYY.MM.DD>_SiteID_timing_Gantt/
 
 Key files:
     auditlogs_<site>.csv
@@ -59,6 +59,48 @@ def default_analysis_root() -> Path:
     return Path(
         f"C:/Users/{username}/OneDrive - Profound Medical/Documents/Analysis"
     )
+
+
+def normalize_output_date_tag(date_tag: str | None) -> str:
+    """
+    Normalize user-facing output dates to ``YYYY.MM.DD``.
+
+    Input:
+        Optional CLI date tag in either ``YYYYMMDD`` or ``YYYY.MM.DD`` format.
+        When omitted, today's date is used.
+    Output:
+        Deterministic dotted date string used in output directory names.
+    Assumptions:
+        Legacy callers may still pass ``YYYYMMDD``; that format remains accepted.
+    """
+    if date_tag is None:
+        return datetime.today().strftime("%Y.%m.%d")
+
+    text = str(date_tag).strip()
+    for fmt in ("%Y.%m.%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y.%m.%d")
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Invalid --date value: {date_tag!r}. Expected YYYYMMDD or YYYY.MM.DD."
+    )
+
+
+def build_timing_gantt_output_dir_name(site_id: str, date_tag: str | None) -> str:
+    """
+    Build the canonical timing Gantt output directory name.
+
+    Input:
+        Site identifier and optional date tag.
+    Output:
+        Folder name in the exact format ``<YYYY.MM.DD>_SiteID_timing_Gantt``.
+    Assumptions:
+        Output naming is tied to the site ID, not an optional short site label.
+    """
+    normalized_date = normalize_output_date_tag(date_tag)
+    return f"{normalized_date}_{site_id}_timing_Gantt"
 
 
 def run_step(name: str, cmd: list[str]) -> None:
@@ -106,15 +148,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--site-label",
         default=None,
-        help="Short label for the site in output folder names/titles. "
-             "Default: same as --site.",
+        help="Optional short label for console display. "
+             "Output directory naming always uses --site.",
     )
 
     parser.add_argument(
         "--date",
         default=None,
-        help="Date tag YYYYMMDD for the analysis folder. "
-             "Default: today's date.",
+        help="Date tag for the analysis folder. "
+             "Accepted: YYYYMMDD or YYYY.MM.DD. Default: today's date.",
     )
 
     parser.add_argument(
@@ -187,11 +229,7 @@ def main() -> None:
     site = args.site
     site_label = args.site_label or site
 
-    # Determine date tag
-    if args.date is not None:
-        date_tag = args.date
-    else:
-        date_tag = datetime.today().strftime("%Y%m%d")
+    date_tag = normalize_output_date_tag(args.date)
 
     # Analysis root and output folder
     if args.analysis_root is not None:
@@ -199,7 +237,7 @@ def main() -> None:
     else:
         analysis_root = default_analysis_root()
 
-    outdir = analysis_root / f"{date_tag}_{site_label}"
+    outdir = analysis_root / build_timing_gantt_output_dir_name(site, date_tag)
     outdir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
