@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 from pathlib import Path
+import re
 
 from .errors import DiscoveryError
 from .models import RunConfig, CaseDiscoveryRecord
@@ -38,15 +39,23 @@ def _dedupe_preserve_order(paths: list[Path]) -> list[Path]:
     return deduped
 
 
+def _expected_case_prefix(site_code: str) -> str | None:
+    match = re.search(r"_(\d{3})$", str(site_code).strip())
+    if match is None:
+        return None
+    return f"{match.group(1)}_"
+
+
 def discover_cases(config: RunConfig) -> list[CaseDiscoveryRecord]:
     site_root = config.site_path if config.site_path is not None else config.root_dir / config.site_code
     if not site_root.exists() or not site_root.is_dir():
         raise DiscoveryError(f"Site path not found or not a directory: {site_root}")
 
-    case_dirs = sorted(
-        [path for path in site_root.iterdir() if path.is_dir()],
-        key=lambda p: p.name.lower(),
-    )
+    case_dirs = [path for path in site_root.iterdir() if path.is_dir()]
+    expected_prefix = _expected_case_prefix(config.site_code)
+    if expected_prefix is not None:
+        case_dirs = [path for path in case_dirs if path.name.startswith(expected_prefix)]
+    case_dirs = sorted(case_dirs, key=lambda p: p.name.lower())
 
     records: list[CaseDiscoveryRecord] = []
     for index, case_path in enumerate(case_dirs, start=1):

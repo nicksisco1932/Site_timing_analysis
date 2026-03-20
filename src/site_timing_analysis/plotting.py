@@ -54,6 +54,8 @@ STATE_COLOR_MAP: dict[str, str] = {
 }
 
 UNKNOWN_STATE_COLOR = "slategray"
+DEVICE_INSERTION_STATE = "Device insertion"
+_DEVICE_INSERTION_START_TOLERANCE_SEC = 1e-9
 
 
 @dataclass(slots=True)
@@ -224,6 +226,94 @@ def prepare_plot_rows(state_intervals: Iterable[StateInterval]) -> PlotPreparati
     )
 
 
+def prepare_device_insertion_normalized_rows(
+    prepared: PlotPreparation,
+) -> tuple[list[PlotRow], list[str], list[str]]:
+    """
+    Build normalized plot rows anchored to Device insertion per eligible case.
+
+    Input:
+        Prepared plot rows using stored interval start seconds.
+    Output:
+        Rebasing-adjusted rows, plotted case order, and explicit skip warnings.
+    Assumptions:
+        Cases without a positive-duration ``Device insertion`` interval are
+        excluded from the normalized plot rather than anchored implicitly.
+    """
+    anchor_by_case: dict[str, float] = {}
+    for row in prepared.rows:
+        if row.state != DEVICE_INSERTION_STATE:
+            continue
+        existing = anchor_by_case.get(row.case_id)
+        if existing is None or row.start_sec < existing:
+            anchor_by_case[row.case_id] = row.start_sec
+
+    plotted_case_order = [case_id for case_id in prepared.case_order if case_id in anchor_by_case]
+    skipped_case_order = [case_id for case_id in prepared.case_order if case_id not in anchor_by_case]
+
+    warnings = [
+        f"{case_id}:plot_skipped_missing_device_insertion"
+        for case_id in skipped_case_order
+    ]
+    if not plotted_case_order:
+        warnings.append("plot:no_cases_with_device_insertion")
+        return [], [], warnings
+
+    normalized_rows: list[PlotRow] = []
+    for row in prepared.rows:
+        if row.case_id not in anchor_by_case:
+            continue
+        normalized_rows.append(
+            PlotRow(
+                case_id=row.case_id,
+                timestamp=row.timestamp,
+                state=row.state,
+                start_sec=float(row.start_sec - anchor_by_case[row.case_id]),
+                duration_sec=row.duration_sec,
+                color=row.color,
+                row_number=row.row_number,
+                quality_flags=list(row.quality_flags),
+            )
+        )
+
+    validate_device_insertion_normalized_rows(normalized_rows)
+    return normalized_rows, plotted_case_order, warnings
+
+
+def validate_device_insertion_normalized_rows(rows: Iterable[PlotRow]) -> None:
+    """
+    Validate that Device insertion starts at zero for each plotted case.
+
+    Input:
+        Plot rows already rebased for the normalized timeline.
+    Output:
+        No return value; raises ``ValueError`` if any plotted case is mis-anchored.
+    Assumptions:
+        Rows are limited to the normalized-plot eligible cases.
+    """
+    insertion_starts: dict[str, float] = {}
+    for row in rows:
+        if row.state != DEVICE_INSERTION_STATE:
+            continue
+        current = insertion_starts.get(row.case_id)
+        if current is None or row.start_sec < current:
+            insertion_starts[row.case_id] = row.start_sec
+
+    if not insertion_starts:
+        return
+
+    bad = {
+        case_id: start_sec
+        for case_id, start_sec in insertion_starts.items()
+        if abs(start_sec) > _DEVICE_INSERTION_START_TOLERANCE_SEC
+    }
+    if not bad:
+        return
+
+    details = ", ".join(f"{case_id}={start_sec:.6f}" for case_id, start_sec in sorted(bad.items()))
+    raise ValueError(f"Normalized plot validation failed: Device insertion start != 0 for {details}")
+
+
 def _build_legend(fig: plt.Figure, ax: plt.Axes, state_order: list[str], rows: list[PlotRow]) -> None:
     plotted_states = {row.state for row in rows}
     legend_states = [state for state in state_order if state in plotted_states]
@@ -250,13 +340,18 @@ def _build_legend(fig: plt.Figure, ax: plt.Axes, state_order: list[str], rows: l
     )
 
 
-def _plot_normalized(prepared: PlotPreparation, out_path: Path) -> None:
+def _plot_normalized(
+    rows: list[PlotRow],
+    case_order: list[str],
+    state_order: list[str],
+    out_path: Path,
+) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig_height = max(3.0, 0.6 * max(1, len(prepared.case_order)) + 1.5)
+    fig_height = max(3.0, 0.6 * max(1, len(case_order)) + 1.5)
     fig, ax = plt.subplots(figsize=(12, fig_height))
 
-    case_to_y = {case_id: idx for idx, case_id in enumerate(prepared.case_order)}
-    for row in prepared.rows:
+    case_to_y = {case_id: idx for idx, case_id in enumerate(case_order)}
+    for row in rows:
         y = case_to_y[row.case_id]
         ax.barh(
             y=y,
@@ -267,19 +362,19 @@ def _plot_normalized(prepared: PlotPreparation, out_path: Path) -> None:
             edgecolor="none",
         )
 
-    axis_window_sec = compute_normalized_axis_window_seconds(prepared.rows)
+    axis_window_sec = compute_normalized_axis_window_seconds(rows)
     if axis_window_sec is not None:
         min_sec, max_sec = axis_window_sec
         ax.set_xlim(seconds_to_minutes(min_sec), seconds_to_minutes(max_sec))
 
-    ax.set_title("Normalized Timeline (Rebased)")
-    ax.set_xlabel("Rebased Time (minutes)")
+    ax.set_title("Normalized Timeline (Device insertion anchored)")
+    ax.set_xlabel("Minutes from Device insertion start")
     ax.set_ylabel("Case")
     ax.set_yticks(list(case_to_y.values()))
-    ax.set_yticklabels(prepared.case_order)
+    ax.set_yticklabels(case_order)
     ax.invert_yaxis()
     ax.grid(axis="x", linestyle="--", alpha=0.25)
-    _build_legend(fig, ax, prepared.state_order, prepared.rows)
+    _build_legend(fig, ax, state_order, rows)
     fig.tight_layout(rect=(0, 0.16, 1, 1))
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
@@ -352,9 +447,12 @@ def generate_timeline_plots(
 ) -> tuple[dict[str, Path], list[str]]:
     prepared = prepare_plot_rows(state_intervals)
     paths = get_plot_output_paths(output_dir)
+    normalized_rows, normalized_case_order, normalized_warnings = prepare_device_insertion_normalized_rows(
+        prepared
+    )
 
-    _plot_normalized(prepared, paths["normalized_timeline"])
+    _plot_normalized(normalized_rows, normalized_case_order, prepared.state_order, paths["normalized_timeline"])
     original_hour_warnings = _plot_original_hour(prepared, paths["original_hour_timeline"])
 
-    warnings = [*prepared.warnings, *original_hour_warnings]
+    warnings = [*prepared.warnings, *normalized_warnings, *original_hour_warnings]
     return paths, warnings

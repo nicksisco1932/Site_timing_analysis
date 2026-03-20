@@ -91,6 +91,23 @@ def test_discovery_ordering_is_stable(tmp_path: Path) -> None:
     assert all("no_database_candidates_found" in record.warnings for record in records)
 
 
+def test_discovery_skips_noncanonical_case_prefixes(tmp_path: Path) -> None:
+    site_root = tmp_path / "Stanford_064"
+    (site_root / "064_01-010").mkdir(parents=True)
+    (site_root / "064_01-002").mkdir(parents=True)
+    (site_root / "STA_01-003").mkdir(parents=True)
+
+    config = build_run_config(
+        site_code="Stanford_064",
+        year_selection="All",
+        root_dir=tmp_path,
+        output_dir=tmp_path / "out",
+    )
+    records = discover_cases(config)
+
+    assert [record.case_id for record in records] == ["064_01-002", "064_01-010"]
+
+
 def test_db_source_precedence_prefers_unzipped_over_zip(tmp_path: Path) -> None:
     case_path = tmp_path / "064_01-001"
     case_path.mkdir()

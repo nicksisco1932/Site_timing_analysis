@@ -17,6 +17,7 @@ from site_timing_analysis.plotting import (
     get_plot_output_paths,
     minutes_to_hhmm_label,
     minutes_since_midnight,
+    prepare_device_insertion_normalized_rows,
     prepare_plot_rows,
     seconds_to_minutes,
 )
@@ -146,6 +147,28 @@ def test_zero_duration_rows_are_excluded_with_warning() -> None:
     assert len(prepared.rows) == 1
     assert prepared.rows[0].state == "Detailed"
     assert any("plot_excluded_nonpositive_duration" in warning for warning in prepared.warnings)
+
+
+def test_device_insertion_normalized_rows_skip_ineligible_cases_and_rebase_to_zero() -> None:
+    intervals = [
+        _interval(case_id="064_01-001", ts="2025-01-01 09:00:00", state="Room ready", start_sec=-120.0, duration_sec=60.0, row=1),
+        _interval(case_id="064_01-001", ts="2025-01-01 09:02:00", state="Device insertion", start_sec=-60.0, duration_sec=30.0, row=2),
+        _interval(case_id="064_01-001", ts="2025-01-01 09:03:00", state="Alignment", start_sec=0.0, duration_sec=45.0, row=3),
+        _interval(case_id="064_01-002", ts="2025-01-01 10:00:00", state="Room ready", start_sec=0.0, duration_sec=30.0, row=4),
+        _interval(case_id="064_01-002", ts="2025-01-01 10:01:00", state="Alignment", start_sec=30.0, duration_sec=45.0, row=5),
+    ]
+
+    prepared = prepare_plot_rows(intervals)
+    normalized_rows, normalized_case_order, warnings = prepare_device_insertion_normalized_rows(prepared)
+
+    assert normalized_case_order == ["064_01-001"]
+    assert any("064_01-002:plot_skipped_missing_device_insertion" == warning for warning in warnings)
+
+    insertion = [row for row in normalized_rows if row.state == "Device insertion"]
+    room_ready = [row for row in normalized_rows if row.state == "Room ready"]
+    assert len(insertion) == 1
+    assert insertion[0].start_sec == 0.0
+    assert room_ready[0].start_sec < 0.0
 
 
 def test_midnight_crossing_emits_original_hour_warning(tmp_path: Path) -> None:
@@ -279,3 +302,14 @@ def test_cli_generates_plot_artifacts_and_captures_plot_warnings(tmp_path: Path)
     assert len(payload_processed) == 1
     assert "normalized_timeline_plot" in payload_processed[0]
     assert "original_hour_timeline_plot" in payload_processed[0]
+
+
+def test_normalized_plot_warnings_include_missing_device_insertion_cases(tmp_path: Path) -> None:
+    intervals = [
+        _interval(case_id="064_01-001", ts="2025-01-01 09:00:00", state="Device insertion", start_sec=0.0, duration_sec=30.0, row=1),
+        _interval(case_id="064_01-002", ts="2025-01-01 09:00:00", state="Alignment", start_sec=0.0, duration_sec=30.0, row=2),
+    ]
+
+    _, warnings = generate_timeline_plots(intervals, tmp_path)
+
+    assert any("064_01-002:plot_skipped_missing_device_insertion" == warning for warning in warnings)
