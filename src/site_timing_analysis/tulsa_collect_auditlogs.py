@@ -23,6 +23,7 @@ Usage examples:
 """
 
 import argparse
+import re
 import os
 import glob
 import sqlite3
@@ -41,7 +42,14 @@ def parse_args():
     parser.add_argument(
         "--site",
         default=None,
-        help="Site folder name under Timing Data, e.g., 'Stanford_064', 'MayoRoch_075'.",
+        help="Site ID used in output naming, e.g., 'Stanford_064', 'MayoRoch_075'.",
+    )
+
+    parser.add_argument(
+        "--site-path",
+        default=None,
+        help="Optional direct filesystem path to the site folder. "
+             "If set, bypass --root/--timing-subdir resolution.",
     )
 
     parser.add_argument(
@@ -134,10 +142,61 @@ def find_site_root(root_dir: Path, timing_subdir: str, site: str) -> Path:
     return site_root
 
 
-def list_case_folders(site_root: Path) -> list[Path]:
+def resolve_site_root(
+    site: str,
+    site_path_arg: str | None,
+    root_dir: Path,
+    timing_subdir: str,
+) -> Path:
+    """
+    Resolve the source site folder for collection.
+
+    Input:
+        Site ID plus either an explicit site path or root/timing-subdir pair.
+    Output:
+        Existing site folder path used for case discovery.
+    Assumptions:
+        Explicit ``--site-path`` takes precedence so output naming can stay tied
+        to the site ID while the source folder keeps its original on-disk label.
+    """
+    if site_path_arg is not None:
+        site_root = Path(site_path_arg)
+        if not site_root.exists():
+            raise FileNotFoundError(f"Explicit --site-path not found: {site_root}")
+        return site_root
+
+    return find_site_root(root_dir, timing_subdir, site)
+
+
+def expected_case_prefix(site: str) -> str | None:
+    """
+    Infer the canonical case-folder prefix from a site ID.
+
+    Input:
+        Site ID such as ``Stanford_064``.
+    Output:
+        Expected case-folder prefix like ``064_`` when the site ID ends in a
+        three-digit code, otherwise ``None``.
+    Assumptions:
+        Legacy site folders may contain auxiliary/non-canonical case folders
+        whose prefixes do not match the site's numeric code.
+    """
+    match = re.search(r"_(\d{3})$", str(site).strip())
+    if match is None:
+        return None
+    return f"{match.group(1)}_"
+
+
+def list_case_folders(site_root: Path, site: str) -> tuple[list[Path], list[str]]:
     case_dirs = [p for p in site_root.iterdir() if p.is_dir()]
+    skipped_names: list[str] = []
+    prefix = expected_case_prefix(site)
+    if prefix is not None:
+        skipped_names = [p.name for p in case_dirs if not p.name.startswith(prefix)]
+        case_dirs = [p for p in case_dirs if p.name.startswith(prefix)]
     case_dirs.sort()
-    return case_dirs
+    skipped_names.sort()
+    return case_dirs, skipped_names
 
 
 # ------------------------------ DB FINDING --------------------------------- #
@@ -348,10 +407,9 @@ def main():
 
     root_dir = resolve_root(args.root)
     yearlist = build_year_list(args.years)
-    site_root = find_site_root(root_dir, args.timing_subdir, args.site)
+    site_root = resolve_site_root(args.site, args.site_path, root_dir, args.timing_subdir)
 
-    timing_root = root_dir / args.timing_subdir
-    tempfolder = timing_root / "temp_collect"
+    tempfolder = outdir / "_temp_collect"
     tempfolder.mkdir(parents=True, exist_ok=True)
 
     print(f"Root dir:   {root_dir}")
@@ -360,11 +418,16 @@ def main():
     print(f"Site root:  {site_root}")
     print(f"Temp root:  {tempfolder}")
 
-    case_folders = list_case_folders(site_root)
+    case_folders, skipped_case_dirs = list_case_folders(site_root, args.site)
     if args.limit_cases is not None:
         case_folders = case_folders[:args.limit_cases]
 
     print(f"Found {len(case_folders)} case folders to process.\n")
+    if skipped_case_dirs:
+        print(
+            "[INFO] Skipping non-canonical case folders for site "
+            f"{args.site}: {', '.join(skipped_case_dirs)}\n"
+        )
 
     all_logs: list[pd.DataFrame] = []
     included_cases = 0

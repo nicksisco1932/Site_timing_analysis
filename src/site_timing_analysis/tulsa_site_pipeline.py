@@ -38,7 +38,6 @@ Key files:
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from datetime import datetime
@@ -53,12 +52,9 @@ from pathlib import Path
 def default_analysis_root() -> Path:
     """
     Default analysis root:
-        C:/Users/<USERNAME>/OneDrive - Profound Medical/Documents/Analysis
+        <repo_root>/outputs/timing_gantt
     """
-    username = os.environ.get("USERNAME", "NicholasSisco")
-    return Path(
-        f"C:/Users/{username}/OneDrive - Profound Medical/Documents/Analysis"
-    )
+    return Path(__file__).resolve().parents[2] / "outputs" / "timing_gantt"
 
 
 def normalize_output_date_tag(date_tag: str | None) -> str:
@@ -135,7 +131,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--site",
         required=True,
-        help="Site folder name under Timing Data, e.g. 'Stanford_064', 'MayoRoch_075'.",
+        help="Site ID used in output naming, e.g. 'Stanford_064', 'MayoRoch_075'.",
+    )
+
+    parser.add_argument(
+        "--site-path",
+        default=None,
+        help="Optional direct filesystem path to the site folder. "
+             "If set, collection uses this path instead of resolving --root/--timing-subdir/--site.",
     )
 
     parser.add_argument(
@@ -163,8 +166,8 @@ def parse_args() -> argparse.Namespace:
         "--analysis-root",
         default=None,
         help="Root for analysis outputs. "
-             "Default: C:/Users/<USERNAME>/OneDrive - Profound Medical/Documents/Analysis",
-    )
+             "Default: <repo_root>/outputs/timing_gantt",
+     )
 
     parser.add_argument(
         "--root",
@@ -275,6 +278,8 @@ def main() -> None:
         if args.root is not None:
             cmd.extend(["--root", args.root])
             cmd.extend(["--timing-subdir", args.timing_subdir])
+        if args.site_path is not None:
+            cmd.extend(["--site-path", args.site_path])
 
         run_step("STEP 1: Collect AuditLogRecords", cmd)
 

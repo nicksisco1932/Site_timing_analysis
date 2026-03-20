@@ -10,10 +10,9 @@ set SITE_LABEL=Stanford
 set YEARS=All
 set DATE=2025.11.19
 
-set ANALYSIS_ROOT=C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\Analysis
-
 REM Repo root (folder where this .bat lives)
 set REPO_ROOT=%~dp0
+set ANALYSIS_ROOT=%REPO_ROOT%outputs\timing_gantt
 
 REM Python in your venv
 set PYTHON=%REPO_ROOT%.venv\Scripts\python.exe

@@ -8,8 +8,10 @@ from site_timing_analysis.tulsa_plot_timing import (
     plot_gantt_from_states,
     prepare_gantt_rows,
 )
+from site_timing_analysis.tulsa_collect_auditlogs import list_case_folders, resolve_site_root
 from site_timing_analysis.tulsa_site_pipeline import (
     build_timing_gantt_output_dir_name,
+    default_analysis_root,
 )
 
 
@@ -54,6 +56,39 @@ def test_build_timing_gantt_output_dir_name_normalizes_date_formats() -> None:
     expected = "2025.11.19_Stanford_064_timing_Gantt"
     assert build_timing_gantt_output_dir_name("Stanford_064", "20251119") == expected
     assert build_timing_gantt_output_dir_name("Stanford_064", "2025.11.19") == expected
+
+
+def test_default_analysis_root_uses_repo_local_timing_output_root() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    assert default_analysis_root() == repo_root / "outputs" / "timing_gantt"
+
+
+def test_resolve_site_root_prefers_explicit_site_path(tmp_path: Path) -> None:
+    root_dir = tmp_path / "root"
+    explicit_site = tmp_path / "Clinical Science Team - Yale_065"
+    fallback_site = root_dir / "Timing Data" / "Yale_065"
+    explicit_site.mkdir(parents=True)
+    fallback_site.mkdir(parents=True)
+
+    resolved = resolve_site_root(
+        "Yale_065",
+        str(explicit_site),
+        root_dir,
+        "Timing Data",
+    )
+
+    assert resolved == explicit_site
+
+
+def test_list_case_folders_skips_noncanonical_prefixes(tmp_path: Path) -> None:
+    site_root = tmp_path / "Clinical Science Team - ASUI_122"
+    for name in ["122_01-001", "122_01-002", "ASU_01-002"]:
+        (site_root / name).mkdir(parents=True)
+
+    case_dirs, skipped = list_case_folders(site_root, "ASUI_122")
+
+    assert [path.name for path in case_dirs] == ["122_01-001", "122_01-002"]
+    assert skipped == ["ASU_01-002"]
 
 
 def test_prepare_gantt_rows_rebases_device_insertion_and_skips_missing_cases() -> None:

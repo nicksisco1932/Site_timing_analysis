@@ -16,10 +16,12 @@ dist/
 *.egg-info/
 
 # Generated run artifacts
-run_outputs/
-run_outputs*/
-manifests/
-test_output/
+/run_outputs/
+/run_outputs_*/
+/manifests/
+/test_output/
+/outputs/timing_gantt/
+/.pytest_tmp*/
 
 # OS/editor noise
 .DS_Store
