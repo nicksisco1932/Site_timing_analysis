@@ -56,6 +56,10 @@ Harden parity and warning behavior after broad real-data trial on the full site 
 - negative rebased-start warning triage added for expected pre-anchor negatives
 - residual full-site rerun outputs generated under `run_outputs_broader_20260311_residual/`
 - additional reduction observed: `>7200 sec` from `9 -> 0`, `>14400 sec` from `2 -> 0`, negative-rebased warnings from `5497 -> 8`
+- Session-synthetic outlier trimming implemented (2026-03-18):
+- large-gap session-derived synthetic intervals are capped at `7200` seconds with explicit provenance (`interval_session_synthetic_truncated`)
+- staged UCSD rerun outputs generated under `run_outputs_ucsd_109_20260318_staged_trimmed/`
+- UCSD staged rerun reduction observed: `>7200 sec` from `1 -> 0`, `>14400 sec` from `1 -> 0`, `>28800 sec` from `1 -> 0`
 - Diagnostics CLI slice implemented (2026-03-11):
 - new CLI options: `--diagnostics` and optional `--diagnostics-file`
 - operator-facing markdown summary emitted after run (`diagnostics_summary.md` by default)
@@ -91,6 +95,7 @@ No hard runtime blocker in interval construction. Remaining blocker is parity-ha
 - emit explicit hardening provenance flags (`interval_truncated_large_gap`, `interval_terminal_state_clamped`, `interval_unassigned_state_truncated`)
 - Residual cleanup policy adopted in timing slice:
 - truncate sparse early-state long gaps for `Room ready`, `TULSA QA`, `Patient positioning & induction` with explicit provenance (`interval_early_state_truncated`)
+- truncate large gaps carried by session-derived synthetic intervals with explicit provenance (`interval_session_synthetic_truncated`)
 - preserve negative rebased starts as a quality flag but emit warnings only for unexpected/extreme cases
 - Add operator diagnostics surface in CLI so full-run validation can emit reproducible run-health summaries without custom post-processing scripts.
 - Use typed exceptions for ambiguous DB resolution and missing required tables.
@@ -108,6 +113,7 @@ No hard runtime blocker in interval construction. Remaining blocker is parity-ha
 - Real-data timing-log enrichment path remains unvalidated where no site `TimingLogs/<case>.csv` source is available (0 timing-log files detected in broad trial).
 - Broad trial produced high warning counts (14,678 total), dominated by negative rebased starts and plot exclusion/quality warnings; warning policy needs tuning for actionable triage.
 - Residual cleanup rerun removed remaining >2h interval outliers, but parity intent for capped early-state durations should be explicitly reviewed/approved against legacy expectations.
+- Some synced source `local.db` files may fail SQLite open-in-place from the original site folder; repo-local staged copies remain a working operational fallback for analysis runs.
 
 ## Next Recommended Step
 
@@ -925,3 +931,61 @@ Next recommended step:
 1. keep new query additions proof-first and reuse the same proof artifact shape for any next hardware question key;
 2. expand hardware query coverage only after reviewing proof outputs on a multi-case/site ingest;
 3. decide whether proof rows should later be mirrored into the planned catalog-backed metadata workflow.
+
+## Site Comparison Label Anonymization (2026-03-16)
+
+Implemented a dedicated anonymized site-comparison exporter:
+
+- new module: `src/site_timing_analysis/site_comparison.py`
+- rendered comparison figures now use neutral labels (`Site A`, `Site B`) while preserving the original internal site-to-data mapping
+- regenerated anonymized comparison artifacts under `2026.03.16-comparison/`
+
+## Timing Gantt Naming + Device Insertion Rebase (2026-03-19)
+
+Scoped timing Gantt workflow updates:
+
+- centralized timing Gantt output directory naming in `src/site_timing_analysis/tulsa_site_pipeline.py`
+- canonical format is now exactly `<YYYY.MM.DD>_SiteID_timing_Gantt`
+- preserved `--site-label` for display only; output naming now always uses `--site`
+- rebased normalized Gantt rows in `src/site_timing_analysis/tulsa_plot_timing.py` so each plotted case anchors `Device insertion` at `t = 0`
+- cases with no positive-duration `Device insertion` are now skipped explicitly with a warning instead of being silently anchored elsewhere
+- added validation/tests in `tests/test_timing_gantt_workflow.py`
+
+Validation notes:
+
+- direct validation on generated test-data states confirms plotted case `999_01-001` has `Device insertion start_min = 0.0`
+- pre-insertion states for that case now appear at negative minutes in the normalized Gantt preparation
+- focused synthetic validation confirms skip behavior: plotted `CASE_A`, skipped `CASE_B`
+
+Known follow-up risk:
+
+- a pre-existing headless matplotlib backend issue remains in `src/site_timing_analysis/tulsa_box_jitter.py`; the timing Gantt plot now renders headlessly, but full `tulsa_site_pipeline.py` validation still stops later in Step 4b unless that separate plotting path is similarly hardened
+
+## Timing Gantt Output Root Cleanup + Four-Site Rerun (2026-03-19)
+
+Scoped workflow changes:
+
+- canonical timing Gantt outputs now default to `outputs/timing_gantt/` under the repo root
+- timing site pipeline supports explicit `--site-path` so output naming can use clean site IDs while source folders keep their original on-disk labels
+- auditlog collection now stages any temporary extracted DBs under the per-run output folder instead of writing temp folders into the source tree
+- site-folder collection now skips non-canonical case folders whose prefixes do not match the site's numeric code (for example `YAL_*`, `STA_*`, `ASU_*`)
+- `.gitignore` now ignores the canonical timing Gantt output root and repo-local pytest temp roots with root-scoped rules
+
+Validation / rerun status:
+
+- reran `Yale_065`, `ASUI_122`, `Stanford_064`, and `UCSD_109` into `outputs/timing_gantt/`
+- output folders produced:
+  - `outputs/timing_gantt/2026.03.19_Yale_065_timing_Gantt/`
+  - `outputs/timing_gantt/2026.03.19_ASUI_122_timing_Gantt/`
+  - `outputs/timing_gantt/2026.03.19_Stanford_064_timing_Gantt/`
+  - `outputs/timing_gantt/2026.03.19_UCSD_109_timing_Gantt/`
+- normalized Gantt validation confirmed `Device insertion start_min = 0.0` for all plotted eligible cases across all four reruns
+- temporary `_temp_collect` folders were removed after successful reruns so the canonical output root only retains final artifacts
+
+Warnings / notable observations:
+
+- Yale skip filter excluded `YAL_01-005`, `YAL_01-007`
+- ASUI skip filter excluded `ASU_01-002`, `ASU_01-003`
+- Stanford skip filter excluded `STA_01-003`, `STA_01-004`, `STA_01-005`, `STA_01-006`, `STA_01-008`
+- legacy pandas `DtypeWarning` messages still appear on large CSV reads, but the reruns completed successfully
+- Yale and UCSD state-machine reads reported some unparseable `TimeStamp` rows that were dropped by legacy logic during state reconstruction

@@ -124,6 +124,69 @@ def _normalize_site_label(raw_value: Any) -> tuple[str, str]:
     return normalized, key
 
 
+def _extract_site_code_from_case_id(case_id: str) -> str:
+    case_text = str(case_id).strip().upper()
+    match = _CANONICAL_CASE_PATTERN.fullmatch(case_text)
+    if not match:
+        return ""
+    prefix = match.group(1)
+    suffix_match = re.search(r"(\d{3})$", prefix)
+    return suffix_match.group(1) if suffix_match else ""
+
+
+def _build_site_normalization_table(case_table_df: pd.DataFrame) -> pd.DataFrame:
+    required_cols = ["site_label_raw", "site_label_normalized", "site_key", "case_id"]
+    site_work = case_table_df[required_cols].copy()
+    site_work["case_site_code"] = site_work["case_id"].map(_extract_site_code_from_case_id)
+    site_work["case_id_non_blank"] = site_work["case_id"].fillna("").astype(str).str.strip().ne("")
+    site_work["case_site_code_non_blank"] = site_work["case_site_code"].fillna("").astype(str).str.strip().ne("")
+
+    table_rows: list[dict[str, Any]] = []
+    grouped = site_work.groupby(["site_label_raw", "site_label_normalized", "site_key"], dropna=False)
+    for (raw_label, normalized_label, site_key), group in grouped:
+        row_count = int(len(group))
+        unique_case_ids = int(group.loc[group["case_id_non_blank"], "case_id"].nunique())
+        evidence_series = group.loc[group["case_site_code_non_blank"], "case_site_code"].astype(str)
+        rows_with_site_code = int(len(evidence_series))
+        value_counts = evidence_series.value_counts()
+        candidate_codes = sorted(value_counts.index.tolist())
+        candidate_counts_text = "|".join(f"{code}:{int(value_counts[code])}" for code in candidate_codes)
+
+        if str(normalized_label).strip() == "":
+            mapping_status = "unmapped"
+            mapping_reason = "blank_site_label"
+            normalized_site_code = ""
+        elif rows_with_site_code == 0:
+            mapping_status = "unmapped"
+            mapping_reason = "no_caseid_site_code_evidence"
+            normalized_site_code = ""
+        elif len(candidate_codes) == 1:
+            mapping_status = "mapped"
+            mapping_reason = "single_caseid_site_code_consensus"
+            normalized_site_code = candidate_codes[0]
+        else:
+            mapping_status = "ambiguous"
+            mapping_reason = "multiple_caseid_site_codes_detected"
+            normalized_site_code = ""
+
+        table_rows.append(
+            {
+                "site_label_raw": raw_label,
+                "site_label_normalized": normalized_label,
+                "site_key": site_key,
+                "row_count": row_count,
+                "unique_case_ids": unique_case_ids,
+                "rows_with_case_site_code": rows_with_site_code,
+                "mapping_status": mapping_status,
+                "normalized_site_code": normalized_site_code,
+                "mapping_reason": mapping_reason,
+                "candidate_site_codes": "|".join(candidate_codes),
+                "candidate_site_code_counts": candidate_counts_text,
+            }
+        )
+    return pd.DataFrame(table_rows).sort_values(["row_count", "site_label_raw"], ascending=[False, True])
+
+
 def parse_time_value(raw_value: Any) -> ParsedTime:
     if _is_blank(raw_value):
         return ParsedTime(raw_text="", minute_of_day=None, parse_kind="blank")
@@ -497,21 +560,21 @@ def run_tff_bounded_normalization(*, workbook_path: Path, output_dir: Path) -> d
         )
 
     if site_column is not None:
-        site_work = case_table_df[
-            ["site_label_raw", "site_label_normalized", "site_key", "guessed_site_code", "case_id"]
-        ].copy()
-        site_work["case_id_non_blank"] = site_work["case_id"].fillna("").astype(str).str.strip() != ""
-        site_mapping_df = (
-            site_work.groupby(
-                ["site_label_raw", "site_label_normalized", "site_key", "guessed_site_code"],
-                dropna=False,
-            )
-            .agg(
-                row_count=("site_label_raw", "size"),
-                unique_case_ids=("case_id", lambda s: s[s.astype(str).str.strip() != ""].nunique()),
-            )
-            .reset_index()
-            .sort_values(["row_count", "site_label_raw"], ascending=[False, True])
+        site_mapping_df = _build_site_normalization_table(case_table_df)
+        case_table_df = case_table_df.merge(
+            site_mapping_df[
+                [
+                    "site_label_raw",
+                    "site_label_normalized",
+                    "site_key",
+                    "mapping_status",
+                    "normalized_site_code",
+                    "mapping_reason",
+                    "candidate_site_codes",
+                ]
+            ],
+            on=["site_label_raw", "site_label_normalized", "site_key"],
+            how="left",
         )
     else:
         site_mapping_df = pd.DataFrame(
@@ -519,11 +582,67 @@ def run_tff_bounded_normalization(*, workbook_path: Path, output_dir: Path) -> d
                 "site_label_raw",
                 "site_label_normalized",
                 "site_key",
-                "guessed_site_code",
                 "row_count",
                 "unique_case_ids",
+                "rows_with_case_site_code",
+                "mapping_status",
+                "normalized_site_code",
+                "mapping_reason",
+                "candidate_site_codes",
+                "candidate_site_code_counts",
             ]
         )
+        case_table_df["mapping_status"] = "unmapped"
+        case_table_df["normalized_site_code"] = ""
+        case_table_df["mapping_reason"] = "no_site_column_detected"
+        case_table_df["candidate_site_codes"] = ""
+
+    case_table_df["mapping_status"] = (
+        case_table_df["mapping_status"].fillna("unmapped").astype(str)
+    )
+    case_table_df["normalized_site_code"] = (
+        case_table_df["normalized_site_code"].fillna("").astype(str)
+    )
+    case_table_df["mapping_reason"] = (
+        case_table_df["mapping_reason"].fillna("unmapped_no_rule").astype(str)
+    )
+    case_table_df["candidate_site_codes"] = (
+        case_table_df["candidate_site_codes"].fillna("").astype(str)
+    )
+
+    if not case_table_df.empty:
+        site_unresolved = case_table_df[case_table_df["mapping_status"] != "mapped"]
+        if not site_unresolved.empty:
+            site_issue_rows = site_unresolved[
+                [
+                    "sheet1_row_number",
+                    "generated_treatment_id_raw",
+                    "case_id",
+                    "mapping_status",
+                    "mapping_reason",
+                ]
+            ].copy()
+            site_issue_rows = site_issue_rows.rename(
+                columns={
+                    "generated_treatment_id_raw": "case_id_raw",
+                    "mapping_reason": "detail",
+                }
+            )
+            site_issue_rows["issue_type"] = site_issue_rows["mapping_status"].map(
+                lambda status: "site_ambiguous" if status == "ambiguous" else "site_unmapped"
+            )
+            site_issue_rows = site_issue_rows[
+                ["sheet1_row_number", "issue_type", "case_id_raw", "case_id", "detail"]
+            ]
+            unresolved_df = pd.concat([unresolved_df, site_issue_rows], ignore_index=True)
+
+    site_mapped_rows = int((case_table_df["mapping_status"] == "mapped").sum()) if not case_table_df.empty else 0
+    site_unmapped_rows = int((case_table_df["mapping_status"] == "unmapped").sum()) if not case_table_df.empty else 0
+    site_ambiguous_rows = int((case_table_df["mapping_status"] == "ambiguous").sum()) if not case_table_df.empty else 0
+
+    label_mapped = int((site_mapping_df["mapping_status"] == "mapped").sum()) if not site_mapping_df.empty else 0
+    label_unmapped = int((site_mapping_df["mapping_status"] == "unmapped").sum()) if not site_mapping_df.empty else 0
+    label_ambiguous = int((site_mapping_df["mapping_status"] == "ambiguous").sum()) if not site_mapping_df.empty else 0
 
     summary_path = output_dir / "tff_bounded_normalization_summary.md"
     summary_lines = [
@@ -543,6 +662,14 @@ def run_tff_bounded_normalization(*, workbook_path: Path, output_dir: Path) -> d
         "## Case ID Soft-Fail",
         f"- soft-fail rows: {int(alignment_df['case_id_soft_fail'].sum()) if not alignment_df.empty else 0}",
         "",
+        "## Site Normalization Status",
+        f"- mapped rows: {site_mapped_rows}",
+        f"- unmapped rows: {site_unmapped_rows}",
+        f"- ambiguous rows: {site_ambiguous_rows}",
+        f"- mapped labels: {label_mapped}",
+        f"- unmapped labels: {label_unmapped}",
+        f"- ambiguous labels: {label_ambiguous}",
+        "",
         "## Timing Correction Signals",
         f"- +12h corrections: {int((correction_df['correction_applied'] == '+12h').sum()) if not correction_df.empty else 0}",
         f"- +24h corrections: {int((correction_df['correction_applied'] == '+24h').sum()) if not correction_df.empty else 0}",
@@ -550,10 +677,31 @@ def run_tff_bounded_normalization(*, workbook_path: Path, output_dir: Path) -> d
     ]
     summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 
+    site_summary_path = output_dir / "tff_site_normalization_summary.md"
+    site_summary_lines = [
+        "# TFF Site Normalization Summary",
+        "",
+        f"- workbook: `{workbook_path}`",
+        f"- source scope: `{SHEET1_NAME}!{SHEET1_USECOLS}`",
+        "",
+        "## Label-Level Classification",
+        f"- mapped labels: {label_mapped}",
+        f"- unmapped labels: {label_unmapped}",
+        f"- ambiguous labels: {label_ambiguous}",
+        "",
+        "## Row-Level Coverage",
+        f"- mapped rows: {site_mapped_rows}",
+        f"- unmapped rows: {site_unmapped_rows}",
+        f"- ambiguous rows: {site_ambiguous_rows}",
+    ]
+    site_summary_path.write_text("\n".join(site_summary_lines) + "\n", encoding="utf-8")
+
     paths = {
         "normalized_case_table": output_dir / "tff_normalized_case_table.csv",
         "case_id_alignment_report": output_dir / "tff_case_id_alignment_report.csv",
         "site_mapping_report": output_dir / "tff_site_mapping_report.csv",
+        "site_normalization_table": output_dir / "tff_site_normalization_table.csv",
+        "site_normalization_summary": site_summary_path,
         "time_correction_audit_report": output_dir / "tff_time_correction_audit_report.csv",
         "unresolved_soft_fail_report": output_dir / "tff_unresolved_soft_fail_report.csv",
         "timing_column_report": output_dir / "tff_timing_column_report.csv",
@@ -563,6 +711,7 @@ def run_tff_bounded_normalization(*, workbook_path: Path, output_dir: Path) -> d
     case_table_df.to_csv(paths["normalized_case_table"], index=False)
     alignment_df.to_csv(paths["case_id_alignment_report"], index=False)
     site_mapping_df.to_csv(paths["site_mapping_report"], index=False)
+    site_mapping_df.to_csv(paths["site_normalization_table"], index=False)
     correction_df.to_csv(paths["time_correction_audit_report"], index=False)
     unresolved_df.to_csv(paths["unresolved_soft_fail_report"], index=False)
     timing_column_report.to_csv(paths["timing_column_report"], index=False)
