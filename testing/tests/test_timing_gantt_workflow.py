@@ -59,7 +59,7 @@ def test_build_timing_gantt_output_dir_name_normalizes_date_formats() -> None:
 
 
 def test_default_analysis_root_uses_repo_local_timing_output_root() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     assert default_analysis_root() == repo_root / "outputs" / "timing_gantt"
 
 

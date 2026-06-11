@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from copy import deepcopy
 from datetime import datetime
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from site_timing_analysis.first_slice_cli import run_first_slice
 from site_timing_analysis.models import StateInterval
+from site_timing_analysis.output_layout import output_layout
 from site_timing_analysis.plotting import (
     STATE_COLOR_MAP,
     STATE_DISPLAY_ORDER,
@@ -149,26 +151,88 @@ def test_zero_duration_rows_are_excluded_with_warning() -> None:
     assert any("plot_excluded_nonpositive_duration" in warning for warning in prepared.warnings)
 
 
-def test_device_insertion_normalized_rows_skip_ineligible_cases_and_rebase_to_zero() -> None:
+def test_device_insertion_normalized_rows_preserve_device_insertion_anchor() -> None:
     intervals = [
         _interval(case_id="064_01-001", ts="2025-01-01 09:00:00", state="Room ready", start_sec=-120.0, duration_sec=60.0, row=1),
         _interval(case_id="064_01-001", ts="2025-01-01 09:02:00", state="Device insertion", start_sec=-60.0, duration_sec=30.0, row=2),
         _interval(case_id="064_01-001", ts="2025-01-01 09:03:00", state="Alignment", start_sec=0.0, duration_sec=45.0, row=3),
         _interval(case_id="064_01-002", ts="2025-01-01 10:00:00", state="Room ready", start_sec=0.0, duration_sec=30.0, row=4),
-        _interval(case_id="064_01-002", ts="2025-01-01 10:01:00", state="Alignment", start_sec=30.0, duration_sec=45.0, row=5),
     ]
 
     prepared = prepare_plot_rows(intervals)
     normalized_rows, normalized_case_order, warnings = prepare_device_insertion_normalized_rows(prepared)
 
     assert normalized_case_order == ["064_01-001"]
-    assert any("064_01-002:plot_skipped_missing_device_insertion" == warning for warning in warnings)
+    assert any("064_01-001:plot_normalized_anchor_used:Device insertion" in warning for warning in warnings)
+    assert any("064_01-002:plot_skipped_missing_normalized_anchor" == warning for warning in warnings)
 
     insertion = [row for row in normalized_rows if row.state == "Device insertion"]
     room_ready = [row for row in normalized_rows if row.state == "Room ready"]
     assert len(insertion) == 1
     assert insertion[0].start_sec == 0.0
     assert room_ready[0].start_sec < 0.0
+
+
+def test_device_insertion_normalized_rows_fallback_to_alignment_when_insertion_is_implausible() -> None:
+    intervals = [
+        _interval(case_id="109_01-021", ts="2026-01-20 08:56:39", state="Alignment", start_sec=1390.128311, duration_sec=300.0, row=1),
+        _interval(case_id="109_01-021", ts="2026-01-20 09:25:00", state="Coarse", start_sec=3100.0, duration_sec=300.0, row=2),
+        _interval(case_id="109_01-021", ts="2026-01-20 10:30:00", state="Treating", start_sec=7000.0, duration_sec=600.0, row=3),
+        _interval(
+            case_id="109_01-021",
+            ts="2026-01-20 11:45:00",
+            state="Post-treatment scans & Device removal",
+            start_sec=11500.0,
+            duration_sec=600.0,
+            row=4,
+        ),
+        _interval(
+            case_id="109_01-021",
+            ts="2026-01-20 20:27:53",
+            state="Device insertion",
+            start_sec=42864.0624,
+            duration_sec=7200.0,
+            row=5,
+        ),
+    ]
+
+    prepared = prepare_plot_rows(intervals)
+    normalized_rows, normalized_case_order, warnings = prepare_device_insertion_normalized_rows(prepared)
+
+    assert normalized_case_order == ["109_01-021"]
+    assert any(
+        "109_01-021:plot_normalized_anchor_rejected:Device insertion:reason=after_end_marker"
+        in warning
+        for warning in warnings
+    )
+    assert any("109_01-021:plot_normalized_anchor_used:Alignment" in warning for warning in warnings)
+
+    alignment = [row for row in normalized_rows if row.state == "Alignment"][0]
+    coarse = [row for row in normalized_rows if row.state == "Coarse"][0]
+    assert alignment.start_sec == 0.0
+    assert coarse.start_sec > 0.0
+
+
+def test_device_insertion_normalized_rows_keep_primary_anchor_for_nearby_normal_cases() -> None:
+    intervals = [
+        _interval(case_id="109_01-020", ts="2025-12-19 12:40:00", state="Room ready", start_sec=-900.0, duration_sec=60.0, row=1),
+        _interval(case_id="109_01-020", ts="2025-12-19 12:50:29", state="Device insertion", start_sec=-637.779617, duration_sec=505.767, row=2),
+        _interval(case_id="109_01-020", ts="2025-12-19 13:01:06", state="Alignment", start_sec=0.0, duration_sec=120.0, row=3),
+        _interval(case_id="109_01-022", ts="2026-01-20 13:30:00", state="Room ready", start_sec=-900.0, duration_sec=60.0, row=4),
+        _interval(case_id="109_01-022", ts="2026-01-20 13:40:53", state="Device insertion", start_sec=-607.727122, duration_sec=607.727, row=5),
+        _interval(case_id="109_01-022", ts="2026-01-20 13:51:00", state="Alignment", start_sec=0.0, duration_sec=120.0, row=6),
+    ]
+
+    prepared = prepare_plot_rows(intervals)
+    normalized_rows, normalized_case_order, warnings = prepare_device_insertion_normalized_rows(prepared)
+
+    assert normalized_case_order == ["109_01-020", "109_01-022"]
+    assert sum("plot_normalized_anchor_used:Device insertion" in warning for warning in warnings) == 2
+
+    for case_id in normalized_case_order:
+        insertion_rows = [row for row in normalized_rows if row.case_id == case_id and row.state == "Device insertion"]
+        assert len(insertion_rows) == 1
+        assert insertion_rows[0].start_sec == 0.0
 
 
 def test_midnight_crossing_emits_original_hour_warning(tmp_path: Path) -> None:
@@ -285,8 +349,9 @@ def test_cli_generates_plot_artifacts_and_captures_plot_warnings(tmp_path: Path)
         ]
     )
 
-    normalized_plot = output_dir / "plots" / "normalized_timeline.png"
-    original_plot = output_dir / "plots" / "original_hour_timeline.png"
+    layout = output_layout(output_dir)
+    normalized_plot = layout.timeline_plots_dir / "normalized_timeline.png"
+    original_plot = layout.timeline_plots_dir / "original_hour_timeline.png"
     assert normalized_plot.exists()
     assert original_plot.exists()
 
@@ -297,19 +362,27 @@ def test_cli_generates_plot_artifacts_and_captures_plot_warnings(tmp_path: Path)
     assert any("plot_original_hour_crosses_midnight" in warning for warning in case_meta["plot_warnings"])
     assert any("plot_original_hour_crosses_midnight" in warning for warning in manifest.warnings)
 
-    payload = json.loads((output_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    payload = json.loads(layout.run_manifest_path.read_text(encoding="utf-8"))
     payload_processed = [row for row in payload["case_results"] if row.get("status") == "processed"]
     assert len(payload_processed) == 1
     assert "normalized_timeline_plot" in payload_processed[0]
     assert "original_hour_timeline_plot" in payload_processed[0]
 
 
-def test_normalized_plot_warnings_include_missing_device_insertion_cases(tmp_path: Path) -> None:
+def test_normalized_plot_warnings_include_fallback_anchor_usage() -> None:
     intervals = [
         _interval(case_id="064_01-001", ts="2025-01-01 09:00:00", state="Device insertion", start_sec=0.0, duration_sec=30.0, row=1),
         _interval(case_id="064_01-002", ts="2025-01-01 09:00:00", state="Alignment", start_sec=0.0, duration_sec=30.0, row=2),
     ]
 
-    _, warnings = generate_timeline_plots(intervals, tmp_path)
+    output_dir = Path("outputs/_tmp_plot_fallback_warning_test")
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _, warnings = generate_timeline_plots(intervals, output_dir)
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
 
-    assert any("064_01-002:plot_skipped_missing_device_insertion" == warning for warning in warnings)
+    assert any("064_01-001:plot_normalized_anchor_used:Device insertion" in warning for warning in warnings)
+    assert any("064_01-002:plot_normalized_anchor_used:Alignment" in warning for warning in warnings)
+    assert not any("064_01-002:plot_skipped_missing_normalized_anchor" == warning for warning in warnings)

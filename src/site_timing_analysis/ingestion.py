@@ -20,6 +20,31 @@ def _connect_read_only(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _stage_unzipped_db_copy(
+    source: DatabaseSourceRecord,
+    extraction_root: Path,
+) -> Path:
+    """
+    Copy an unzipped source database into the extraction root for retry reads.
+
+    Input:
+        Original unzipped database source plus the configured extraction root.
+    Output:
+        Repo-local copy path at ``<extraction_root>/<case_id>/local.db``.
+    Assumptions:
+        Some synced source ``local.db`` files cannot be opened in place even for
+        read-only access, while a byte-for-byte repo-local copy remains readable.
+    """
+    case_extract_root = extraction_root.resolve() / source.case_id
+    case_extract_root.mkdir(parents=True, exist_ok=True)
+    staged_path = case_extract_root / "local.db"
+    try:
+        shutil.copyfile(source.source_path, staged_path)
+    except OSError as exc:
+        raise DatabaseReadError(source.source_path, f"Failed to stage SQLite database copy: {exc}") from exc
+    return staged_path
+
+
 def _table_names(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     return sorted([str(row[0]) for row in rows], key=lambda name: name.lower())
@@ -87,8 +112,13 @@ def ingest_case_database(
     extraction_root: Path | None = None,
 ) -> dict[str, Any]:
     db_path = _resolve_db_file_path(source, extraction_root)
-
-    conn = _connect_read_only(db_path)
+    try:
+        conn = _connect_read_only(db_path)
+    except DatabaseReadError:
+        if source.source_type != "unzipped" or extraction_root is None:
+            raise
+        db_path = _stage_unzipped_db_copy(source, extraction_root)
+        conn = _connect_read_only(db_path)
     try:
         tables = _table_names(conn)
         if "AuditLogRecords" not in tables:

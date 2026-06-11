@@ -13,6 +13,14 @@ _SESSION_FIELD_TO_EVENT: dict[str, str] = {
     "TimePatientTransferredAt": "PatientTransferEnds",
 }
 _KNOWN_UNMAPPED_SESSION_FIELDS: tuple[str, ...] = ("TimeUaRemovedAt",)
+_SESSION_PRE_END_FIELDS: tuple[str, ...] = (
+    "TimePatientSedatedAt",
+    "TimeUaInsertedAt",
+)
+_SESSION_END_MARKER_FIELDS: tuple[str, ...] = (
+    "TimeUaRemovedAt",
+    "TimePatientTransferredAt",
+)
 
 _TIMING_LABEL_TO_EVENTS: dict[str, tuple[tuple[str, str], ...]] = {
     "Anesthesia Team starts to prepapre the patient ": (("AnesthesiaStart", "start"),),
@@ -71,6 +79,38 @@ def _parse_optional_datetime(raw_value: Any) -> tuple[datetime | None, str]:
     return parsed, "ok"
 
 
+def _session_end_marker_violation(
+    field_name: str,
+    parsed_fields: dict[str, datetime | None],
+) -> str | None:
+    """
+    Reject session-derived pre-device markers that occur after explicit end markers.
+
+    Input:
+        A session field name plus parseable timestamps from one ``Sessions`` row.
+    Output:
+        The first violated end-marker field name, or ``None`` when the field is
+        chronologically plausible.
+    Assumptions:
+        ``TimePatientSedatedAt`` and ``TimeUaInsertedAt`` are pre/end-of-device
+        workflow markers and should never occur after ``TimeUaRemovedAt`` or
+        ``TimePatientTransferredAt`` from the same session row.
+    """
+    if field_name not in _SESSION_PRE_END_FIELDS:
+        return None
+
+    field_ts = parsed_fields.get(field_name)
+    if field_ts is None:
+        return None
+
+    for end_field in _SESSION_END_MARKER_FIELDS:
+        end_ts = parsed_fields.get(end_field)
+        if end_ts is not None and field_ts > end_ts:
+            return end_field
+
+    return None
+
+
 def derive_session_synthetic_events(
     case_id: str,
     sessions_rows: Iterable[dict[str, Any]],
@@ -84,17 +124,30 @@ def derive_session_synthetic_events(
 
     tracked_fields = [*list(_SESSION_FIELD_TO_EVENT.keys()), *_KNOWN_UNMAPPED_SESSION_FIELDS]
     stats: dict[str, dict[str, int]] = {
-        field: {"missing": 0, "unparseable": 0, "sentinel": 0, "parseable": 0, "missing_column": 0}
+        field: {
+            "missing": 0,
+            "unparseable": 0,
+            "sentinel": 0,
+            "parseable": 0,
+            "missing_column": 0,
+            "chronology_invalid": 0,
+        }
         for field in tracked_fields
     }
 
     for row_idx, session_row in enumerate(rows, start=1):
+        parsed_fields: dict[str, datetime | None] = {}
+        parse_statuses: dict[str, str] = {}
         for field_name in tracked_fields:
             if field_name not in session_row:
                 stats[field_name]["missing_column"] += 1
+                parse_statuses[field_name] = "missing_column"
+                parsed_fields[field_name] = None
                 continue
 
             parsed_ts, status = _parse_optional_datetime(session_row.get(field_name))
+            parse_statuses[field_name] = status
+            parsed_fields[field_name] = parsed_ts
             if status == "missing":
                 stats[field_name]["missing"] += 1
                 continue
@@ -112,11 +165,26 @@ def derive_session_synthetic_events(
                 continue
 
             stats[field_name]["parseable"] += 1
+        for field_name in tracked_fields:
+            if parse_statuses.get(field_name) != "ok":
+                continue
+
+            violated_end_field = _session_end_marker_violation(field_name, parsed_fields)
+            if violated_end_field is not None:
+                stats[field_name]["parseable"] -= 1
+                stats[field_name]["chronology_invalid"] += 1
+                warnings.append(
+                    f"{case_id}:session_field_after_end_marker:{field_name}:row={row_idx}:"
+                    f"end_field={violated_end_field}:value={session_row.get(field_name)}:"
+                    f"end_value={session_row.get(violated_end_field)}"
+                )
+                continue
+
             if field_name in _SESSION_FIELD_TO_EVENT:
                 events.append(
                     SyntheticEvent(
                         case_id=case_id,
-                        timestamp=parsed_ts,
+                        timestamp=parsed_fields[field_name],
                         event_type=_SESSION_FIELD_TO_EVENT[field_name],
                         segment_id=None,
                         event_kind=None,
@@ -138,12 +206,15 @@ def derive_session_synthetic_events(
         if field_stats["missing_column"] == len(rows):
             warnings.append(f"{case_id}:session_missing_column:{field_name}")
         elif field_stats["parseable"] == 0 and (
-            field_stats["missing"] > 0 or field_stats["unparseable"] > 0 or field_stats["sentinel"] > 0
+            field_stats["missing"] > 0
+            or field_stats["unparseable"] > 0
+            or field_stats["sentinel"] > 0
+            or field_stats["chronology_invalid"] > 0
         ):
             warnings.append(
                 f"{case_id}:session_field_not_usable:{field_name}:"
                 f"missing={field_stats['missing']}:unparseable={field_stats['unparseable']}:"
-                f"sentinel={field_stats['sentinel']}"
+                f"sentinel={field_stats['sentinel']}:chronology_invalid={field_stats['chronology_invalid']}"
             )
 
     return events, warnings

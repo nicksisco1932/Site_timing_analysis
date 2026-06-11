@@ -20,7 +20,11 @@ dist/
 /run_outputs_*/
 /manifests/
 /test_output/
-/outputs/timing_gantt/
+/testing/test_output/
+/Legacy/run_outputs_archive/
+/outputs/*
+!/outputs/comparisons/
+!/outputs/comparisons/**
 /.pytest_tmp*/
 
 # OS/editor noise

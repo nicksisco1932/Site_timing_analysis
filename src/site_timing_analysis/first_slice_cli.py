@@ -25,6 +25,7 @@ from .manifest import (
 )
 from .models import RunManifest, StateInterval
 from .normalization import normalize_audit_events
+from .output_layout import first_existing_path, output_layout
 from .plotting import generate_timeline_plots
 from .state_machine import assign_states
 from .timing import compute_state_intervals
@@ -81,19 +82,29 @@ def build_run_diagnostics(
 
     warning_categories = Counter(_warning_category(warning) for warning in run_manifest.warnings)
     top_warning_categories = warning_categories.most_common(8)
+    layout = output_layout(output_dir)
 
-    run_manifest_path = output_dir / "run_manifest.json"
-    case_manifest_path = output_dir / "case_manifest.csv"
-    interval_diag_path = output_dir / "interval_outlier_diagnostics.md"
+    run_manifest_path = first_existing_path(layout.run_manifest_path, output_dir / "run_manifest.json")
+    case_manifest_path = first_existing_path(layout.case_manifest_path, output_dir / "case_manifest.csv")
+    interval_diag_path = first_existing_path(
+        layout.interval_outlier_diagnostics_path,
+        output_dir / "interval_outlier_diagnostics.md",
+    )
     normalized_plot_path = (
         Path(run_manifest.artifact_paths["normalized_timeline"])
         if "normalized_timeline" in run_manifest.artifact_paths
-        else output_dir / "plots" / "normalized_timeline.png"
+        else first_existing_path(
+            layout.timeline_plots_dir / "normalized_timeline.png",
+            output_dir / "plots" / "normalized_timeline.png",
+        )
     )
     original_plot_path = (
         Path(run_manifest.artifact_paths["original_hour_timeline"])
         if "original_hour_timeline" in run_manifest.artifact_paths
-        else output_dir / "plots" / "original_hour_timeline.png"
+        else first_existing_path(
+            layout.timeline_plots_dir / "original_hour_timeline.png",
+            output_dir / "plots" / "original_hour_timeline.png",
+        )
     )
 
     artifact_summary = {
@@ -203,7 +214,7 @@ def write_diagnostics_summary(
         state_intervals=state_intervals,
         output_dir=output_dir,
     )
-    out_path = diagnostics_file if diagnostics_file is not None else output_dir / "diagnostics_summary.md"
+    out_path = diagnostics_file if diagnostics_file is not None else output_layout(output_dir).diagnostics_summary_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(_render_diagnostics_markdown(summary), encoding="utf-8")
     return out_path
@@ -213,6 +224,7 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
     started_at = datetime.now(timezone.utc)
     config = build_run_config_from_args(argv)
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    layout = output_layout(config.output_dir)
     allowed_years = set(resolve_year_list(config.year_selection))
     site_root = config.site_path if config.site_path is not None else config.root_dir / config.site_code
 
@@ -249,7 +261,7 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
                 zip_member_index=config.zip_member_index,
             )
 
-            ingestion_result = ingest_case_database(source)
+            ingestion_result = ingest_case_database(source, extraction_root=layout.db_extract_dir)
             raw_events = ingestion_result["raw_events"]
             sessions_rows = ingestion_result["sessions_rows"]
             if raw_events:
@@ -396,14 +408,18 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
         )
         warnings.extend(tff_warnings)
 
-    run_manifest_path = config.output_dir / "run_manifest.json"
+    run_manifest_path = layout.run_manifest_path
     artifact_paths = {
         "case_manifest": str(case_manifest_path),
         "run_manifest": str(run_manifest_path),
-        "normalized_events_dir": str(config.output_dir / "normalized_events"),
-        "enriched_events_dir": str(config.output_dir / "enriched_events"),
-        "state_labeled_events_dir": str(config.output_dir / "state_labeled_events"),
-        "state_intervals_dir": str(config.output_dir / "state_intervals"),
+        "manifests_dir": str(layout.manifests_dir),
+        "normalized_events_dir": str(layout.normalized_events_dir),
+        "enriched_events_dir": str(layout.enriched_events_dir),
+        "state_labeled_events_dir": str(layout.state_labeled_events_dir),
+        "state_intervals_dir": str(layout.state_intervals_dir),
+        "tables_dir": str(layout.tables_dir),
+        "reports_dir": str(layout.reports_dir),
+        "scratch_dir": str(layout.scratch_dir),
     }
     for key, value in plot_paths.items():
         artifact_paths[key] = str(value)

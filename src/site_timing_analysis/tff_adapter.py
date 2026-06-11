@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .output_layout import output_layout
 
 _WORKFLOW_TIMING_FIELDS: tuple[str, ...] = (
     "patient_enters_mri",
@@ -53,7 +54,11 @@ class _KnownExclusionMatch:
 
 
 def default_tff_case_table_path(output_dir: Path) -> Path:
-    return output_dir / "tff_audit" / "tff_normalized_case_table.csv"
+    return output_layout(output_dir).reports_dir / "tff_audit" / "tff_normalized_case_table.csv"
+
+
+def _tff_output_dir(output_dir: Path) -> Path:
+    return output_layout(output_dir).reports_dir / "tff_adapter"
 
 
 def _is_truthy(value: Any) -> bool:
@@ -207,7 +212,7 @@ def _write_filtered_known_exclusions_csv(
     filtered_rows: list[dict[str, Any]],
     output_dir: Path,
 ) -> Path:
-    out_dir = output_dir / "tff_adapter"
+    out_dir = _tff_output_dir(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "tff_filtered_known_exclusions.csv"
     fieldnames = [
@@ -231,7 +236,7 @@ def _write_joined_case_dataset(
     joined_rows: list[dict[str, Any]],
     output_dir: Path,
 ) -> Path:
-    out_dir = output_dir / "tff_adapter"
+    out_dir = _tff_output_dir(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "tff_case_join.csv"
 
@@ -275,7 +280,7 @@ def _write_integration_summary(
     unmatched_tff_count: int,
     known_exclusion_filter_enabled: bool,
 ) -> Path:
-    out_dir = output_dir / "tff_adapter"
+    out_dir = _tff_output_dir(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "tff_integration_summary.md"
 

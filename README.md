@@ -51,6 +51,8 @@ Install dependencies:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
+Pytest is configured to discover the suite under `testing/tests`.
+
 ## Basic Pipeline Run
 Current orchestrator is `site_timing_analysis.first_slice_cli` (name retained from early slice work).
 
@@ -74,16 +76,27 @@ Optional timing-log override:
 ```
 
 ## Output Artifacts
-Main outputs written under the selected `--output` directory:
+The selected `--output` directory is treated as one run folder. New staged-pipeline
+outputs use a unified layout:
 
-- `run_manifest.json`
-- `case_manifest.csv`
-- `normalized_events/<case_id>_normalized_events.csv`
-- `enriched_events/<case_id>_enriched_events.csv`
-- `state_labeled_events/<case_id>_state_labeled_events.csv`
-- `state_intervals/<case_id>_state_intervals.csv`
-- `plots/normalized_timeline.png`
-- `plots/original_hour_timeline.png`
+- `manifests/run_manifest.json`
+- `manifests/case_manifest.csv`
+- `events/normalized/<case_id>_normalized_events.csv`
+- `events/enriched/<case_id>_enriched_events.csv`
+- `events/state_labeled/<case_id>_state_labeled_events.csv`
+- `intervals/state/<case_id>_state_intervals.csv`
+- `plots/timelines/normalized_timeline.png`
+- `plots/timelines/original_hour_timeline.png`
+- `tables/per_case_state_durations.csv`
+- `tables/per_case_summary.csv`
+- `reports/diagnostics_summary.md`
+- `reports/workflow_summary/*.csv`
+- `reports/workflow_summary/*.png`
+- `scratch/db_extract/` for temporary copied/extracted databases
+
+Readers for plot tables and workflow summaries still tolerate historical run
+folders that used root-level `case_manifest.csv`, `state_intervals/`, and
+`summary/` conventions.
 
 ## Legacy Reference
 - Legacy R reference: `Legacy/r_reference/ReadAuditLogs.R`

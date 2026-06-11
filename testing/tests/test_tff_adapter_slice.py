@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from site_timing_analysis.first_slice_cli import run_first_slice
+from site_timing_analysis.output_layout import output_layout
 from site_timing_analysis.tff_adapter import apply_read_only_tff_adapter
 
 
@@ -161,7 +162,7 @@ def test_cli_default_off_keeps_tff_adapter_disabled(tmp_path: Path) -> None:
     assert manifest.cases_processed == 1
     assert "tff_case_join" not in manifest.artifact_paths
     assert "tff_integration_summary" not in manifest.artifact_paths
-    assert not (output_dir / "tff_adapter" / "tff_case_join.csv").exists()
+    assert not (output_layout(output_dir).reports_dir / "tff_adapter" / "tff_case_join.csv").exists()
 
 
 def test_cli_tff_adapter_enabled_writes_join_artifacts(tmp_path: Path) -> None:

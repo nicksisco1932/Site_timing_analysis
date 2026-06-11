@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import sqlite3
 import zipfile
 from datetime import datetime
@@ -14,6 +15,7 @@ from site_timing_analysis.db_source import resolve_database_source
 from site_timing_analysis.discovery import discover_cases
 from site_timing_analysis.errors import (
     AmbiguousDatabaseSourceError,
+    DatabaseReadError,
     MissingTableError,
     NormalizationError,
 )
@@ -33,6 +35,7 @@ from site_timing_analysis.models import (
     StateInterval,
 )
 from site_timing_analysis.normalization import normalize_audit_events
+from site_timing_analysis.output_layout import output_layout
 
 
 def _create_sqlite(path: Path, sql: list[str]) -> None:
@@ -259,6 +262,57 @@ def test_treatmentid_is_canonicalized_to_segment_id(tmp_path: Path) -> None:
     assert kept[0].segment_id == "SEG-123"
 
 
+def test_ingestion_retries_unzipped_db_from_output_staging_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    scratch_root = Path("outputs/_tmp_ingestion_copy_retry_test")
+    shutil.rmtree(scratch_root, ignore_errors=True)
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    try:
+        db_path = scratch_root / "external_case" / "local.db"
+        _create_sqlite(
+            db_path,
+            [
+                "CREATE TABLE AuditLogRecords ("
+                "Id INTEGER PRIMARY KEY, "
+                "TimeStamp TEXT, "
+                "AuditRecordBase_Type TEXT, "
+                "SegmentId TEXT, "
+                "EventKind INTEGER"
+                ")",
+                "INSERT INTO AuditLogRecords (TimeStamp, AuditRecordBase_Type, SegmentId, EventKind) "
+                "VALUES ('2025-01-01 12:00:00.0000000', 'SetupWorkflowRecord', 'SEG-123', 2)",
+            ],
+        )
+
+        source = DatabaseSourceRecord(
+            case_id="064_01-001",
+            case_path=db_path.parent,
+            source_type="unzipped",
+            source_path=db_path,
+            selected_zip_member=None,
+            resolution_rule="test",
+        )
+
+        original_connect = sqlite3.connect
+        source_uri = f"file:{db_path.as_posix()}?mode=ro"
+
+        def flaky_connect(database: str, *args: object, **kwargs: object) -> sqlite3.Connection:
+            if database == source_uri:
+                raise sqlite3.OperationalError("unable to open database file")
+            return original_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr("site_timing_analysis.ingestion.sqlite3.connect", flaky_connect)
+
+        extraction_root = output_layout(scratch_root / "output").db_extract_dir
+        result = ingest_case_database(source, extraction_root=extraction_root)
+
+        assert result["db_path"].resolve() == (extraction_root / "064_01-001" / "local.db").resolve()
+        assert result["db_path"].exists()
+        assert len(result["raw_events"]) == 1
+        assert result["raw_events"][0].raw_event_type == "SetupWorkflowRecord"
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
+
+
 def test_manifest_and_normalized_event_exports(tmp_path: Path) -> None:
     now = datetime(2026, 3, 10, 12, 0, 0)
     manifest = RunManifest(
@@ -362,10 +416,11 @@ def test_first_slice_cli_writes_required_exports(tmp_path: Path) -> None:
 
     assert manifest.cases_discovered == 1
     assert manifest.cases_processed == 1
-    assert (output_dir / "run_manifest.json").exists()
-    assert (output_dir / "case_manifest.csv").exists()
+    layout = output_layout(output_dir)
+    assert layout.run_manifest_path.exists()
+    assert layout.case_manifest_path.exists()
 
-    normalized_path = output_dir / "normalized_events" / "064_01-001_normalized_events.csv"
+    normalized_path = layout.normalized_events_dir / "064_01-001_normalized_events.csv"
     assert normalized_path.exists()
 
     with normalized_path.open("r", encoding="utf-8", newline="") as handle:
@@ -413,7 +468,7 @@ def test_diagnostics_option_writes_default_summary_file(tmp_path: Path) -> None:
         ]
     )
 
-    diagnostics_path = output_dir / "diagnostics_summary.md"
+    diagnostics_path = output_layout(output_dir).diagnostics_summary_path
     assert diagnostics_path.exists()
     assert manifest.artifact_paths.get("diagnostics_summary") == str(diagnostics_path)
     text = diagnostics_path.read_text(encoding="utf-8")
@@ -467,16 +522,18 @@ def test_diagnostics_file_override_is_respected(tmp_path: Path) -> None:
     )
 
     assert custom_path.exists()
-    assert not (output_dir / "diagnostics_summary.md").exists()
+    assert not output_layout(output_dir).diagnostics_summary_path.exists()
     assert manifest.artifact_paths.get("diagnostics_summary") == str(custom_path)
 
 
 def test_build_run_diagnostics_counts_thresholds_and_quality_flags(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
-    (out_dir / "case_manifest.csv").write_text("case_id\n064_01-001\n", encoding="utf-8")
-    plots_dir = out_dir / "plots"
+    layout = output_layout(out_dir)
+    layout.run_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    layout.run_manifest_path.write_text("{}", encoding="utf-8")
+    layout.case_manifest_path.write_text("case_id\n064_01-001\n", encoding="utf-8")
+    plots_dir = layout.timeline_plots_dir
     plots_dir.mkdir(parents=True, exist_ok=True)
     (plots_dir / "normalized_timeline.png").write_text("x", encoding="utf-8")
     (plots_dir / "original_hour_timeline.png").write_text("x", encoding="utf-8")
@@ -591,4 +648,4 @@ def test_cli_behavior_unchanged_without_diagnostics(tmp_path: Path) -> None:
 
     assert manifest.cases_processed == 1
     assert "diagnostics_summary" not in manifest.artifact_paths
-    assert not (output_dir / "diagnostics_summary.md").exists()
+    assert not output_layout(output_dir).diagnostics_summary_path.exists()

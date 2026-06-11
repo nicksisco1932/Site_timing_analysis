@@ -25,7 +25,7 @@ def run_step(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def run_testdata_pipeline(repo_root: Path, outdir: Path) -> dict[str, Path]:
     site = "TESTDATA"
-    db_path = repo_root / "test_data" / "local.db"
+    db_path = repo_root / "testing" / "test_data" / "local.db"
     outdir.mkdir(parents=True, exist_ok=True)
 
     run_step(
@@ -94,7 +94,7 @@ def run_testdata_pipeline(repo_root: Path, outdir: Path) -> dict[str, Path]:
 
 
 def test_test_data_pipeline_outputs_expected_artifacts(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     outputs = run_testdata_pipeline(repo_root, tmp_path / "pipeline")
 
     for path in [outputs["auditlogs"], outputs["states"], outputs["summary"], outputs["sanity"]]:
@@ -109,7 +109,7 @@ def test_test_data_pipeline_outputs_expected_artifacts(tmp_path: Path) -> None:
 
 
 def test_test_data_pipeline_has_no_unmapped_state_rows(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     outputs = run_testdata_pipeline(repo_root, tmp_path / "pipeline")
 
     states_df = pd.read_csv(outputs["states"])
@@ -138,7 +138,7 @@ def test_test_data_pipeline_has_no_unmapped_state_rows(tmp_path: Path) -> None:
 
 
 def test_test_data_summary_matches_expected_shape(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     outputs = run_testdata_pipeline(repo_root, tmp_path / "pipeline")
 
     summary_df = pd.read_csv(outputs["summary"])

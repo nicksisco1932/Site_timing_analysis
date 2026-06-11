@@ -16,6 +16,7 @@ from site_timing_analysis.enrichment import (
 )
 from site_timing_analysis.first_slice_cli import run_first_slice
 from site_timing_analysis.manifest import write_enriched_events_csv
+from site_timing_analysis.output_layout import output_layout
 from site_timing_analysis.models import NormalizedAuditEvent, SyntheticEvent, TimingLogEntry
 from site_timing_analysis.timing_log import find_timing_log, parse_timing_log_csv
 from site_timing_analysis.errors import TimingLogParseError
@@ -122,6 +123,33 @@ def test_valid_session_timestamps_still_emit_neighboring_events_with_sentinel_pr
     assert "PatientTransferEnds" in event_types
     assert any("ignored_session_sentinel_timestamp:TimePatientSedatedAt" in warning for warning in warnings)
     assert "064_01-001:session_field_unmapped:TimeUaRemovedAt:row=1" in warnings
+
+
+def test_session_pre_device_fields_after_end_markers_are_ignored() -> None:
+    sessions_rows = [
+        {
+            "TimePatientSedatedAt": "2026-01-20 19:58:52.882",
+            "TimeUaInsertedAt": "2026-01-20 20:27:53.292",
+            "TimeUaRemovedAt": "2026-01-20 12:20:53.292",
+            "TimePatientTransferredAt": "2026-01-20 12:40:53.388",
+        }
+    ]
+
+    events, warnings = derive_session_synthetic_events("109_01-021", sessions_rows)
+
+    assert [event.event_type for event in events] == ["PatientTransferEnds"]
+    assert any(
+        "session_field_after_end_marker:TimePatientSedatedAt:row=1:end_field=TimeUaRemovedAt"
+        in warning
+        for warning in warnings
+    )
+    assert any(
+        "session_field_after_end_marker:TimeUaInsertedAt:row=1:end_field=TimeUaRemovedAt"
+        in warning
+        for warning in warnings
+    )
+    assert any("session_field_not_usable:TimePatientSedatedAt" in warning for warning in warnings)
+    assert any("session_field_not_usable:TimeUaInsertedAt" in warning for warning in warnings)
 
 
 def test_timing_log_absent_behavior(tmp_path: Path) -> None:
@@ -337,7 +365,8 @@ def test_cli_enrichment_exports_and_warning_capture(tmp_path: Path) -> None:
         ]
     )
 
-    enriched_path = output_dir / "enriched_events" / "064_01-001_enriched_events.csv"
+    layout = output_layout(output_dir)
+    enriched_path = layout.enriched_events_dir / "064_01-001_enriched_events.csv"
     assert enriched_path.exists()
 
     processed_cases = [case for case in manifest.case_results if case.get("status") == "processed"]
@@ -350,7 +379,7 @@ def test_cli_enrichment_exports_and_warning_capture(tmp_path: Path) -> None:
     assert any("timing_log_unmapped_label" in warning for warning in case_meta["enrichment_warnings"])
     assert any("timing_log_unmapped_label" in warning for warning in manifest.warnings)
 
-    manifest_path = output_dir / "run_manifest.json"
+    manifest_path = layout.run_manifest_path
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     case_results = [row for row in payload["case_results"] if row.get("status") == "processed"]
     assert len(case_results) == 1

@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 from .models import StateInterval
+from .output_layout import output_layout
 
 
 STATE_DISPLAY_ORDER: tuple[str, ...] = (
@@ -56,6 +57,19 @@ STATE_COLOR_MAP: dict[str, str] = {
 UNKNOWN_STATE_COLOR = "slategray"
 DEVICE_INSERTION_STATE = "Device insertion"
 _DEVICE_INSERTION_START_TOLERANCE_SEC = 1e-9
+_NORMALIZED_ANCHOR_PRIORITY: tuple[str, ...] = (
+    DEVICE_INSERTION_STATE,
+    "Alignment",
+    "Coarse",
+    "Detailed",
+    "Planning start angle",
+    "Treating",
+)
+_NORMALIZED_END_MARKER_STATES: tuple[str, ...] = (
+    "Post-treatment scans & Device removal",
+    "Patient recovery & transfer",
+)
+_TREATING_STATE = "Treating"
 
 
 @dataclass(slots=True)
@@ -79,7 +93,7 @@ class PlotPreparation:
 
 
 def get_plot_output_paths(output_dir: Path) -> dict[str, Path]:
-    plots_dir = output_dir.resolve() / "plots"
+    plots_dir = output_layout(output_dir).timeline_plots_dir
     return {
         "plots_dir": plots_dir,
         "normalized_timeline": plots_dir / "normalized_timeline.png",
@@ -230,33 +244,37 @@ def prepare_device_insertion_normalized_rows(
     prepared: PlotPreparation,
 ) -> tuple[list[PlotRow], list[str], list[str]]:
     """
-    Build normalized plot rows anchored to Device insertion per eligible case.
+    Build normalized plot rows anchored to the best valid procedural anchor.
 
     Input:
         Prepared plot rows using stored interval start seconds.
     Output:
         Rebasing-adjusted rows, plotted case order, and explicit skip warnings.
     Assumptions:
-        Cases without a positive-duration ``Device insertion`` interval are
-        excluded from the normalized plot rather than anchored implicitly.
+        Preferred anchor order is ``Device insertion -> Alignment -> Coarse ->
+        Detailed -> Planning start angle -> Treating``. Candidate anchors are
+        rejected if they occur after explicit end-marker states, or if a
+        pre-treating anchor occurs after the first Treating interval.
     """
-    anchor_by_case: dict[str, float] = {}
+    rows_by_case: dict[str, list[PlotRow]] = {case_id: [] for case_id in prepared.case_order}
     for row in prepared.rows:
-        if row.state != DEVICE_INSERTION_STATE:
+        rows_by_case.setdefault(row.case_id, []).append(row)
+
+    anchor_by_case: dict[str, float] = {}
+    anchor_state_by_case: dict[str, str] = {}
+    warnings: list[str] = []
+
+    for case_id in prepared.case_order:
+        anchor_state, anchor_start, case_warnings = _select_normalized_anchor(case_id, rows_by_case.get(case_id, []))
+        warnings.extend(case_warnings)
+        if anchor_state is None or anchor_start is None:
             continue
-        existing = anchor_by_case.get(row.case_id)
-        if existing is None or row.start_sec < existing:
-            anchor_by_case[row.case_id] = row.start_sec
+        anchor_by_case[case_id] = anchor_start
+        anchor_state_by_case[case_id] = anchor_state
 
     plotted_case_order = [case_id for case_id in prepared.case_order if case_id in anchor_by_case]
-    skipped_case_order = [case_id for case_id in prepared.case_order if case_id not in anchor_by_case]
-
-    warnings = [
-        f"{case_id}:plot_skipped_missing_device_insertion"
-        for case_id in skipped_case_order
-    ]
     if not plotted_case_order:
-        warnings.append("plot:no_cases_with_device_insertion")
+        warnings.append("plot:no_cases_with_normalized_anchor")
         return [], [], warnings
 
     normalized_rows: list[PlotRow] = []
@@ -276,42 +294,110 @@ def prepare_device_insertion_normalized_rows(
             )
         )
 
-    validate_device_insertion_normalized_rows(normalized_rows)
+    validate_normalized_anchor_rows(normalized_rows, anchor_state_by_case)
     return normalized_rows, plotted_case_order, warnings
 
 
-def validate_device_insertion_normalized_rows(rows: Iterable[PlotRow]) -> None:
+def _first_state_start(rows: Iterable[PlotRow], state: str) -> float | None:
+    starts = [float(row.start_sec) for row in rows if row.state == state]
+    if not starts:
+        return None
+    return min(starts)
+
+
+def _select_normalized_anchor(
+    case_id: str,
+    rows: list[PlotRow],
+) -> tuple[str | None, float | None, list[str]]:
     """
-    Validate that Device insertion starts at zero for each plotted case.
+    Choose a deterministic normalized-plot anchor for one case.
 
     Input:
-        Plot rows already rebased for the normalized timeline.
+        Plot-ready rows for a single case.
+    Output:
+        Selected anchor state/start plus case-scoped warnings.
+    Assumptions:
+        ``Device insertion`` remains the preferred anchor, but fallback anchors
+        are allowed only when they remain temporally plausible relative to
+        Treating and explicit end-marker states.
+    """
+    warnings: list[str] = []
+    first_treating_start = _first_state_start(rows, _TREATING_STATE)
+    end_marker_candidates = [
+        start
+        for start in (_first_state_start(rows, state) for state in _NORMALIZED_END_MARKER_STATES)
+        if start is not None
+    ]
+    first_end_marker_start = min(end_marker_candidates) if end_marker_candidates else None
+
+    for anchor_state in _NORMALIZED_ANCHOR_PRIORITY:
+        candidate_start = _first_state_start(rows, anchor_state)
+        if candidate_start is None:
+            continue
+
+        if first_end_marker_start is not None and candidate_start > first_end_marker_start:
+            warnings.append(
+                f"{case_id}:plot_normalized_anchor_rejected:{anchor_state}:"
+                f"reason=after_end_marker:start_sec={candidate_start:.6f}:"
+                f"end_marker_start_sec={first_end_marker_start:.6f}"
+            )
+            continue
+
+        if anchor_state != _TREATING_STATE and first_treating_start is not None and candidate_start > first_treating_start:
+            warnings.append(
+                f"{case_id}:plot_normalized_anchor_rejected:{anchor_state}:"
+                f"reason=after_treating:start_sec={candidate_start:.6f}:"
+                f"treating_start_sec={first_treating_start:.6f}"
+            )
+            continue
+
+        warnings.append(
+            f"{case_id}:plot_normalized_anchor_used:{anchor_state}:"
+            f"start_sec={candidate_start:.6f}:fallback={int(anchor_state != DEVICE_INSERTION_STATE)}"
+        )
+        return anchor_state, candidate_start, warnings
+
+    warnings.append(f"{case_id}:plot_skipped_missing_normalized_anchor")
+    return None, None, warnings
+
+
+def validate_normalized_anchor_rows(
+    rows: Iterable[PlotRow],
+    anchor_state_by_case: dict[str, str],
+) -> None:
+    """
+    Validate that the selected normalized anchor starts at zero for each case.
+
+    Input:
+        Plot rows already rebased for the normalized timeline and the selected
+        anchor state for each plotted case.
     Output:
         No return value; raises ``ValueError`` if any plotted case is mis-anchored.
     Assumptions:
         Rows are limited to the normalized-plot eligible cases.
     """
-    insertion_starts: dict[str, float] = {}
+    anchor_starts: dict[str, float] = {}
     for row in rows:
-        if row.state != DEVICE_INSERTION_STATE:
+        anchor_state = anchor_state_by_case.get(row.case_id)
+        if anchor_state is None or row.state != anchor_state:
             continue
-        current = insertion_starts.get(row.case_id)
+        current = anchor_starts.get(row.case_id)
         if current is None or row.start_sec < current:
-            insertion_starts[row.case_id] = row.start_sec
+            anchor_starts[row.case_id] = row.start_sec
 
-    if not insertion_starts:
+    if not anchor_starts:
         return
 
     bad = {
         case_id: start_sec
-        for case_id, start_sec in insertion_starts.items()
+        for case_id, start_sec in anchor_starts.items()
         if abs(start_sec) > _DEVICE_INSERTION_START_TOLERANCE_SEC
     }
     if not bad:
         return
 
     details = ", ".join(f"{case_id}={start_sec:.6f}" for case_id, start_sec in sorted(bad.items()))
-    raise ValueError(f"Normalized plot validation failed: Device insertion start != 0 for {details}")
+    raise ValueError(f"Normalized plot validation failed: selected anchor start != 0 for {details}")
 
 
 def _build_legend(fig: plt.Figure, ax: plt.Axes, state_order: list[str], rows: list[PlotRow]) -> None:
@@ -367,8 +453,8 @@ def _plot_normalized(
         min_sec, max_sec = axis_window_sec
         ax.set_xlim(seconds_to_minutes(min_sec), seconds_to_minutes(max_sec))
 
-    ax.set_title("Normalized Timeline (Device insertion anchored)")
-    ax.set_xlabel("Minutes from Device insertion start")
+    ax.set_title("Normalized Timeline (selected procedural anchor)")
+    ax.set_xlabel("Minutes from selected procedural anchor")
     ax.set_ylabel("Case")
     ax.set_yticks(list(case_to_y.values()))
     ax.set_yticklabels(case_order)

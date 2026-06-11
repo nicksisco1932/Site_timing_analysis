@@ -179,7 +179,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--diagnostics-file",
         default=None,
-        help="Optional diagnostics output file path. Default: <output>/diagnostics_summary.md",
+        help="Optional diagnostics output file path. Default: <output>/reports/diagnostics_summary.md",
     )
     parser.add_argument(
         "--enable-tff-adapter",
@@ -190,7 +190,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--tff-normalized-case-table",
         default=None,
         help="Path to tff_normalized_case_table.csv. "
-        "Default when adapter enabled: <output>/tff_audit/tff_normalized_case_table.csv",
+        "Default when adapter enabled: <output>/reports/tff_audit/tff_normalized_case_table.csv",
     )
     parser.add_argument(
         "--tff-filter-known-exclusions",

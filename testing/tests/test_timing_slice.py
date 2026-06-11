@@ -10,6 +10,7 @@ from pathlib import Path
 from site_timing_analysis.first_slice_cli import run_first_slice
 from site_timing_analysis.manifest import write_state_intervals_csv
 from site_timing_analysis.models import StateLabeledEvent
+from site_timing_analysis.output_layout import output_layout
 from site_timing_analysis.plotting import generate_timeline_plots
 from site_timing_analysis.timing import compute_state_intervals
 
@@ -415,7 +416,8 @@ def test_cli_generates_state_intervals_artifact_and_timing_warnings(tmp_path: Pa
         ]
     )
 
-    interval_path = output_dir / "state_intervals" / "064_01-001_state_intervals.csv"
+    layout = output_layout(output_dir)
+    interval_path = layout.state_intervals_dir / "064_01-001_state_intervals.csv"
     assert interval_path.exists()
 
     processed_cases = [case for case in manifest.case_results if case.get("status") == "processed"]
@@ -426,7 +428,7 @@ def test_cli_generates_state_intervals_artifact_and_timing_warnings(tmp_path: Pa
     assert any("case_end_inferred" in warning for warning in case_meta["timing_warnings"])
     assert any("case_end_inferred" in warning for warning in manifest.warnings)
 
-    payload = json.loads((output_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    payload = json.loads(layout.run_manifest_path.read_text(encoding="utf-8"))
     payload_processed = [row for row in payload["case_results"] if row.get("status") == "processed"]
     assert len(payload_processed) == 1
     assert "state_interval_export" in payload_processed[0]

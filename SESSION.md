@@ -989,3 +989,292 @@ Warnings / notable observations:
 - Stanford skip filter excluded `STA_01-003`, `STA_01-004`, `STA_01-005`, `STA_01-006`, `STA_01-008`
 - legacy pandas `DtypeWarning` messages still appear on large CSV reads, but the reruns completed successfully
 - Yale and UCSD state-machine reads reported some unparseable `TimeStamp` rows that were dropped by legacy logic during state reconstruction
+
+## Case-Specific RCA: `109_01-021` Session Anchor Guard (2026-03-20)
+
+Scoped staged-pipeline hardening:
+
+- confirmed the left-shifted normalized placement for `109_01-021` came from raw `Sessions` timestamps, not plotting math
+- offending raw values in the single `Sessions` row were:
+  - `TimePatientSedatedAt = 2026-01-20 19:58:52.882`
+  - `TimeUaInsertedAt = 2026-01-20 20:27:53.292`
+  - while the same row already had `TimeUaRemovedAt = 2026-01-20 12:20:53.292`
+  - and `TimePatientTransferredAt = 2026-01-20 12:40:53.388`
+- added a narrow chronology guard in `src/site_timing_analysis/enrichment.py`
+- session-derived `TimePatientSedatedAt` / `TimeUaInsertedAt` are now ignored when they occur after `TimeUaRemovedAt` or `TimePatientTransferredAt` in the same `Sessions` row
+- normalized plotting now falls back deterministically when `Device insertion` is unavailable or implausible:
+  - `Device insertion`
+  - `Alignment`
+  - `Coarse`
+  - `Detailed`
+  - `Planning start angle`
+  - `Treating`
+- per-case plot warnings now record which normalized anchor was actually used
+- added focused regression coverage in `tests/test_enrichment_slice.py`
+- added focused regression coverage in `tests/test_plotting_slice.py`
+- generated reproducible RCA artifacts under `outputs/rca/2026.03.20_109_01-021_device_insertion/`
+
+Minimal validation completed:
+
+- focused pytest checks passed for the chronology-guard test plus normalized-anchor preservation/fallback tests
+- in-memory verification on real cases `109_01-020`, `109_01-021`, and `109_01-022` confirmed:
+  - `109_01-021` no longer emits synthetic `Ready4Urology` / `DeviceInsertionEnds` from the bad session row
+  - `109_01-021` remains plotted in the normalized timeline using `Alignment` fallback (`start_sec=1390.128311`)
+  - nearby normal cases `109_01-020` and `109_01-022` remain plotted with unchanged `Device insertion` anchors
+
+UCSD_109 staged-output rerun completed in place (2026-03-20):
+
+- reran `site_timing_analysis.first_slice_cli` against repo-local staged inputs at `test_output/staged_ucsd_109_20260318`
+- refreshed output folder: `run_outputs_ucsd_109_20260318_staged_trimmed/`
+- regenerated `plots/normalized_timeline.png` and `run_manifest.json` in place so the misleading normalized plot is replaced by the corrected fallback-anchor plot
+- rerun manifest confirms:
+  - `109_01-020:plot_normalized_anchor_used:Device insertion:start_sec=-637.779617:fallback=0`
+  - `109_01-021:plot_normalized_anchor_used:Alignment:start_sec=1390.128311:fallback=1`
+  - `109_01-022:plot_normalized_anchor_used:Device insertion:start_sec=-607.727122:fallback=0`
+
+Corrected canonical UCSD_109 rerun completed (2026-03-20):
+
+- the earlier 2026-03-20 rerun above was not a valid site refresh because `first_slice_cli` was manually pointed at the stale snapshot `test_output/staged_ucsd_109_20260318` and wrote to `run_outputs_ucsd_109_20260318_staged_trimmed/` instead of the canonical `outputs/timing_gantt/` tree
+- canonical live source resolved from repo workflow conventions:
+  - `C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - UCSD_109`
+- stale snapshot vs current live source comparison:
+  - stale snapshot cases: `27`
+  - current live source cases: `29`
+  - cases missing from the stale rerun: `109_01-028`, `109_01-029`
+- canonical refreshed output folder:
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/`
+- live-source rerun command used:
+  - `.\.venv\Scripts\python.exe -m site_timing_analysis.first_slice_cli --site UCSD_109 --years All --root "C:\Users\NicholasSisco\Profound Medical" --site-path "C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - UCSD_109" --output "C:\Users\NicholasSisco\Documents\GitHub\Site_timing_analysis\outputs\timing_gantt\2026.03.20_UCSD_109_timing_Gantt" --diagnostics`
+- first non-escalated live-source attempt discovered all `29` cases but could not read the two new synced `local.db` files in place
+- added a narrow ingestion fallback in `src/site_timing_analysis/ingestion.py`:
+  - if an unzipped source DB cannot be opened read-only, copy it into the run-local extraction root under the output folder and retry there
+  - `first_slice_cli` now passes `<output>/_db_extract` as the extraction root so this fallback stays inside the canonical output tree
+- after rerunning with elevated filesystem access against the live source:
+  - discovered: `29`
+  - processed: `29`
+  - failed: `0`
+  - new cases ingested: `109_01-028`, `109_01-029`
+- refreshed manifest confirms preserved anchor behavior:
+  - `109_01-020:plot_normalized_anchor_used:Device insertion:start_sec=-637.779617:fallback=0`
+  - `109_01-021:session_field_after_end_marker:TimeUaInsertedAt:row=1:end_field=TimeUaRemovedAt:...`
+  - `109_01-021:plot_normalized_anchor_used:Alignment:start_sec=1390.128311:fallback=1`
+  - `109_01-022:plot_normalized_anchor_used:Device insertion:start_sec=-607.727122:fallback=0`
+
+## Plot Table Export Utility Added (2026-03-20)
+
+Objective addressed:
+
+- export shareable numeric tables for the timing Gantt plots without recomputing state logic or changing plotting behavior
+
+Implementation scope:
+
+- added `src/site_timing_analysis/plot_tables.py`
+- export path reuses `plotting.prepare_plot_rows(...)` so rows match the plotted bars exactly after the existing empty-state/nonpositive-duration filtering
+- new generated artifacts for the current canonical UCSD_109 run:
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/tables/per_case_state_durations.csv`
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/tables/per_case_summary.csv`
+- added focused regression coverage in `tests/test_plot_tables.py`
+
+Export contents:
+
+- `per_case_state_durations.csv`
+  - `case_id`
+  - `state`
+  - `start_sec`
+  - `end_sec`
+  - `duration_min`
+- `per_case_summary.csv`
+  - one row per case
+  - one column per plotted state with total minutes
+  - `total_time` as the sum across plotted state columns
+
+Verification completed:
+
+- focused pytest passed for the new export slice
+- spot checks on `109_01-020`, `109_01-021`, and `109_01-029` confirmed the exported segment rows exactly match the plot-ready filtered interval rows
+- summary totals matched the summed segment minutes within expected CSV rounding precision
+
+## UCSD_109 Workflow Summary Export Added (2026-03-20)
+
+Objective addressed:
+
+- create a presentation-ready aggregated workflow summary plot and one-row table for the canonical UCSD_109 timing-gantt run using existing timing exports only
+
+Implementation scope:
+
+- added `src/site_timing_analysis/workflow_summary.py`
+- the summary path reads `tables/per_case_summary.csv` from a completed run and only falls back to `plot_tables` export if that table is missing
+- detailed states are rolled into five fixed phases:
+  - `Pre-op`
+  - `Device insertion`
+  - `Planning`
+  - `Ablation`
+  - `Post-op`
+- per-phase values are computed as medians across all cases in the run
+- `total_time` is defined as the sum of the displayed phase medians so the summary row matches the stacked-bar width exactly
+- generated canonical UCSD_109 summary artifacts:
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/summary/ucsd_109_workflow_summary.csv`
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/summary/ucsd_109_workflow_summary.png`
+- existing gantt plotting code in `plotting.py` was not modified
+
+Validation completed:
+
+- focused pytest added in `tests/test_workflow_summary.py`
+- exported UCSD_109 summary row matches a direct recomputation from `tables/per_case_summary.csv`
+- verified summary values:
+  - `Pre-op = 88.055824`
+  - `Device insertion = 22.840725`
+  - `Planning = 42.485925`
+  - `Ablation = 63.933829`
+  - `Post-op = 24.088271`
+  - `total_time = 241.404574`
+- spot-checked underlying per-case phase totals for `109_01-020`, `109_01-021`, and `109_01-029`
+
+## UCSD_109 Workflow Tertiles Added (2026-03-20)
+
+Objective addressed:
+
+- extend the workflow summary exporter to support chronological tertile comparison for the canonical UCSD_109 run
+
+Implementation scope:
+
+- updated `src/site_timing_analysis/workflow_summary.py`
+- added `--mode tertiles` to the standalone summary exporter
+- chronology rule now prefers a `case_date` column when present and otherwise derives the date from each case's earliest `state_intervals` timestamp before falling back to `case_id`
+- tertile grouping is fixed to:
+  - `Early`: first 10 cases
+  - `Mid`: next 10 cases
+  - `Late`: remaining 9 cases
+- generated canonical UCSD_109 tertile artifacts:
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/summary/ucsd_109_workflow_tertiles.csv`
+  - `outputs/timing_gantt/2026.03.20_UCSD_109_timing_Gantt/summary/ucsd_109_workflow_tertiles.png`
+
+Validation completed:
+
+- focused tertile regression coverage added in `tests/test_workflow_summary.py`
+- targeted pytest now covers:
+  - case-date precedence over case-id sorting
+  - exact `10 / 10 / 9` group sizes
+  - tertile CSV + PNG export
+  - `total_time == sum(phase medians)` for each row
+- canonical UCSD_109 run verification:
+  - `Early`: `109_01-001` through `109_01-010` (`2024-06-06` to `2025-06-05`)
+  - `Mid`: `109_01-011` through `109_01-020` (`2025-07-03` to `2025-12-19`)
+  - `Late`: `109_01-021` through `109_01-029` (`2026-01-20` to `2026-03-17`)
+- verified tertile medians:
+  - `Early`: `Pre-op 98.442452`, `Device insertion 21.809739`, `Planning 50.867541`, `Ablation 50.799000`, `Post-op 27.116504`, `total_time 249.035234`
+  - `Mid`: `Pre-op 83.021836`, `Device insertion 29.896473`, `Planning 43.188572`, `Ablation 75.430932`, `Post-op 23.432579`, `total_time 254.970393`
+  - `Late`: `Pre-op 70.027423`, `Device insertion 22.505408`, `Planning 28.008765`, `Ablation 74.631260`, `Post-op 25.572168`, `total_time 220.745024`
+
+## Stanford Workflow by Year Added (2026-03-20)
+
+Objective addressed:
+
+- extend the workflow summary exporter to support calendar-year grouping for the canonical Stanford timing-gantt run
+
+Implementation scope:
+
+- updated `src/site_timing_analysis/workflow_summary.py`
+- added `--mode by-year` to the standalone summary exporter
+- year grouping uses the same chronology resolver as tertiles:
+  - prefer explicit `case_date` when present
+  - otherwise derive from earliest `state_intervals` timestamp
+- grouped-year artifacts now write to:
+  - `outputs/timing_gantt/<run_dir>/summary/stanford_workflow_by_year.csv`
+  - `outputs/timing_gantt/<run_dir>/summary/stanford_workflow_by_year.png`
+- existing gantt plotting code in `plotting.py` remains unchanged
+
+Validation completed:
+
+- focused regression coverage added in `tests/test_workflow_summary.py` for:
+  - explicit `case_date` precedence in year grouping
+  - earliest-timestamp fallback for year grouping
+  - grouped CSV + PNG export
+  - `total_time == sum(phase medians)` for each year row
+- canonical Stanford run used:
+  - `outputs/timing_gantt/2026.03.19_Stanford_064_timing_Gantt/`
+- Stanford case coverage:
+  - discovered in `case_manifest.csv`: `136`
+  - processed timing cases with `state_intervals`: `135`
+  - discovered-but-not-processed case: `064_01-039`
+- verified year counts across the `135` timing-ready cases:
+  - `2021: 10`
+  - `2022: 21`
+  - `2023: 20`
+  - `2024: 33`
+  - `2025: 44`
+  - `2026: 7`
+- verified grouped medians:
+  - `2021`: `Pre-op 146.273357`, `Device insertion 31.743841`, `Planning 79.184809`, `Ablation 93.969418`, `Post-op 47.928448`, `total_time 399.099873`
+  - `2022`: `Pre-op 140.667069`, `Device insertion 30.845617`, `Planning 96.931258`, `Ablation 96.025685`, `Post-op 80.127393`, `total_time 444.597022`
+  - `2023`: `Pre-op 133.317588`, `Device insertion 37.715898`, `Planning 129.561229`, `Ablation 122.963176`, `Post-op 64.467495`, `total_time 488.025386`
+  - `2024`: `Pre-op 140.574756`, `Device insertion 30.511137`, `Planning 126.980976`, `Ablation 98.672415`, `Post-op 56.575816`, `total_time 453.315100`
+  - `2025`: `Pre-op 151.527423`, `Device insertion 31.210750`, `Planning 96.032170`, `Ablation 100.321417`, `Post-op 42.793734`, `total_time 421.885495`
+  - `2026`: `Pre-op 149.625104`, `Device insertion 18.656946`, `Planning 74.595615`, `Ablation 94.711191`, `Post-op 39.371818`, `total_time 376.960674`
+
+## Unified Output Layout Added (2026-06-04)
+
+Objective addressed:
+
+- reduce output-folder sprawl and make staged-pipeline run folders easier to navigate.
+
+Implementation scope:
+
+- added `src/site_timing_analysis/output_layout.py` as the canonical run-folder map
+- kept `--output` semantics as the run directory boundary
+- routed new staged-pipeline outputs to:
+  - `manifests/`
+  - `events/normalized/`
+  - `events/enriched/`
+  - `events/state_labeled/`
+  - `intervals/state/`
+  - `plots/timelines/`
+  - `tables/`
+  - `reports/`
+  - `scratch/db_extract/`
+- moved workflow-summary exports under `reports/workflow_summary/`
+- moved TFF adapter audit/join artifacts under `reports/tff_adapter/`
+- updated diagnostics default to `reports/diagnostics_summary.md`
+- preserved old-run readability for plot-table and workflow-summary readers by falling back to historical root-level paths where needed
+- updated README output-artifact documentation
+
+Validation completed:
+
+- layout-focused staged-pipeline/reporting tests passed: `82 passed`
+- broader focused set including TFF path checks passed except the pre-existing known-exclusion discovery-policy mismatch
+- full suite remains blocked by known legacy headless matplotlib/Tk failures in `tulsa_gantt_plots.py` plus the same TFF noncanonical-case discovery mismatch
+
+Next recommended step:
+
+1. decide whether to keep legacy helper-script outputs as-is or route them through the same canonical layout;
+2. fix the legacy plotting backend issue by forcing a headless matplotlib backend in `tulsa_gantt_plots.py`;
+3. resolve the TFF known-exclusion test/policy mismatch for noncanonical Stanford `STA_*` case IDs.
+
+## Root Directory Cleanup (2026-06-04)
+
+Objective addressed:
+
+- reduce root-directory clutter before running a real example.
+
+Moves completed:
+
+- archived historical `run_outputs*` directories under `Legacy/run_outputs_archive/`
+- moved root comparison outputs and reports under `outputs/comparisons/`
+- moved `test_data/`, `test_output/`, and `tests/` under `testing/`
+- moved root-level generated `manifests/` under `Legacy/run_outputs_archive/`
+- updated `pyproject.toml` pytest discovery to `testing/tests`
+- updated active test/smoke references from root-level `test_data` / `test_output` to `testing/test_data` / `testing/test_output`
+- updated `.gitignore` so `outputs/comparisons/` remains visible while generated non-comparison outputs stay ignored
+
+Validation completed:
+
+- focused staged-pipeline/reporting tests passed from the new test location: `82 passed`
+- full suite result after relocation: `101 passed`, `4 failed`
+- remaining failures match pre-existing issues:
+  - legacy `tulsa_gantt_plots.py` still needs headless matplotlib backend hardening
+  - TFF known-exclusion test still conflicts with noncanonical Stanford `STA_*` discovery filtering
+
+Known remaining root clutter:
+
+- `.pytest_tmp*` directories are ignored but Windows permission-locked
+- `tmp_analysis_outputs_gantt_20260319/` and `tmp_validation_gantt_20260319/` are tracked validation fixtures and were left in place pending explicit approval for a fixture-directory move

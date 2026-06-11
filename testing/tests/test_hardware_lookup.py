@@ -18,7 +18,8 @@ from site_timing_analysis.hardware_lookup import (
 
 
 def _make_test_dir() -> Path:
-    root = Path("test_output").resolve()
+    root = Path("testing") / "test_output"
+    root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix="hardware_lookup_", dir=root))
 

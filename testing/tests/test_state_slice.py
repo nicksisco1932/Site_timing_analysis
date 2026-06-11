@@ -9,6 +9,7 @@ from pathlib import Path
 
 from site_timing_analysis.first_slice_cli import run_first_slice
 from site_timing_analysis.manifest import write_state_labeled_events_csv
+from site_timing_analysis.output_layout import output_layout
 from site_timing_analysis.models import EnrichedEvent
 from site_timing_analysis.state_machine import assign_states
 
@@ -212,7 +213,8 @@ def test_cli_generates_state_labeled_artifact_and_warning_capture(tmp_path: Path
         ]
     )
 
-    state_labeled_path = output_dir / "state_labeled_events" / "064_01-001_state_labeled_events.csv"
+    layout = output_layout(output_dir)
+    state_labeled_path = layout.state_labeled_events_dir / "064_01-001_state_labeled_events.csv"
     assert state_labeled_path.exists()
 
     processed_cases = [case for case in manifest.case_results if case.get("status") == "processed"]
@@ -223,7 +225,7 @@ def test_cli_generates_state_labeled_artifact_and_warning_capture(tmp_path: Path
     assert any("state_unmapped_event_type" in warning for warning in case_meta["state_warnings"])
     assert any("state_unmapped_event_type" in warning for warning in manifest.warnings)
 
-    manifest_payload = json.loads((output_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    manifest_payload = json.loads(layout.run_manifest_path.read_text(encoding="utf-8"))
     processed_payload_rows = [row for row in manifest_payload["case_results"] if row.get("status") == "processed"]
     assert len(processed_payload_rows) == 1
     assert "state_labeled_export" in processed_payload_rows[0]

@@ -15,7 +15,7 @@ No Excel timing sheets, no state machine, no plotting.
 Just raw AuditLogRecords + basic identifiers.
 
 Also supports a direct single-DB mode for local smoke testing:
-    python tulsa_collect_auditlogs.py --db-path test_data/local.db --outdir out
+    python tulsa_collect_auditlogs.py --db-path testing/test_data/local.db --outdir out
 
 Usage examples:
     python tulsa_collect_auditlogs.py --site Stanford_064

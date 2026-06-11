@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Run a repeatable smoke test against test_data/local.db.
+Run a repeatable smoke test against testing/test_data/local.db.
 
 This is intentionally narrow:
 - collect raw AuditLogRecords from a direct local.db path
@@ -35,8 +35,8 @@ def run_step(repo_root: Path, *args: str) -> None:
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    db_path = repo_root / "test_data" / "local.db"
-    outdir = repo_root / "test_output" / "test_data_smoke"
+    db_path = repo_root / "testing" / "test_data" / "local.db"
+    outdir = repo_root / "testing" / "test_output" / "test_data_smoke"
     outdir.mkdir(parents=True, exist_ok=True)
 
     if not db_path.exists():

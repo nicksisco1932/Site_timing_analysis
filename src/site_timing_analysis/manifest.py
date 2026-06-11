@@ -16,6 +16,7 @@ from .models import (
     StateLabeledEvent,
     StateInterval,
 )
+from .output_layout import output_layout
 
 
 def _serialize_value(value: Any) -> Any:
@@ -38,7 +39,8 @@ def _ensure_output_dir(output_dir: Path) -> Path:
 
 def write_run_manifest(run_manifest: RunManifest, output_dir: Path) -> Path:
     out_dir = _ensure_output_dir(output_dir)
-    out_path = out_dir / "run_manifest.json"
+    out_path = output_layout(out_dir).run_manifest_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _serialize_value(asdict(run_manifest))
     try:
@@ -50,7 +52,8 @@ def write_run_manifest(run_manifest: RunManifest, output_dir: Path) -> Path:
 
 def write_case_manifest(case_records: Iterable[CaseDiscoveryRecord], output_dir: Path) -> Path:
     out_dir = _ensure_output_dir(output_dir)
-    out_path = out_dir / "case_manifest.csv"
+    out_path = output_layout(out_dir).case_manifest_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fieldnames = [
         "site_code",
@@ -92,7 +95,7 @@ def write_normalized_events_csv(
     normalized_events: Iterable[NormalizedAuditEvent],
     output_dir: Path,
 ) -> Path:
-    out_dir = _ensure_output_dir(output_dir) / "normalized_events"
+    out_dir = output_layout(_ensure_output_dir(output_dir)).normalized_events_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{case_id}_normalized_events.csv"
 
@@ -140,7 +143,7 @@ def write_enriched_events_csv(
     enriched_events: Iterable[EnrichedEvent],
     output_dir: Path,
 ) -> Path:
-    out_dir = _ensure_output_dir(output_dir) / "enriched_events"
+    out_dir = output_layout(_ensure_output_dir(output_dir)).enriched_events_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{case_id}_enriched_events.csv"
 
@@ -192,7 +195,7 @@ def write_state_labeled_events_csv(
     state_labeled_events: Iterable[StateLabeledEvent],
     output_dir: Path,
 ) -> Path:
-    out_dir = _ensure_output_dir(output_dir) / "state_labeled_events"
+    out_dir = output_layout(_ensure_output_dir(output_dir)).state_labeled_events_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{case_id}_state_labeled_events.csv"
 
@@ -250,7 +253,7 @@ def write_state_intervals_csv(
     state_intervals: Iterable[StateInterval],
     output_dir: Path,
 ) -> Path:
-    out_dir = _ensure_output_dir(output_dir) / "state_intervals"
+    out_dir = output_layout(_ensure_output_dir(output_dir)).state_intervals_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{case_id}_state_intervals.csv"
 
