@@ -101,3 +101,30 @@ sanitization, and no-mutation cases. The live site-122 check returned exit `0`
 with 19 remote canonical cases, 19 local canonical cases, and 19 complete
 matches; noncanonical folders were reported separately. The repository suite
 reported 171 passing tests.
+
+## 6. Durable analytical database — Completed 2026-08-11
+
+Schema v1 established the explicit cross-site store, immutable source/parser/
+configuration history, canonical events, unrounded detailed intervals, endpoint
+provenance, validation, reconciliation, and SQL-backed 20-column export. The
+sole operational store was relocated safely to the locally pinned OneDrive
+`Documents\10_Databases` directory with `DELETE` journaling and a one-workstation
+writer rule.
+
+Schema v2 was applied by validated copy-up migration and records exact clinical
+source/ZIP-member and timing-log dependencies, including explicit absence,
+plus parser, configuration, and cache-contract fingerprints. The validated
+runner now supports opt-in `--cache-mode read-only --database <path>`; default
+behavior remains cache-off and imports remain a separate explicit command.
+Exact hits reconstruct normalized, enriched, labeled, interval, plot, report,
+and public artifacts through the standard writers and gates. Corrupt entries
+fall back to normal parsing with `cache_entry_invalid` diagnostics.
+
+Live ASUI acceptance produced 9/9 hits and live UCLA acceptance produced 5/5
+hits. Their public CSVs, event/interval artifacts, plots, and reconciliation
+artifacts were byte-identical to uncached runs, and source hashes, sizes, and
+modification times were unchanged. SQL `export-long`, `compare-runs`,
+`summarize-runs`, and wide exports reconciled to stored detailed intervals;
+the ASUI comparison contained 135 zero-difference rows. The canonical store
+remained integrity-clean, foreign-key-clean, pinned, and free of WAL/SHM files
+after OneDrive resumed.

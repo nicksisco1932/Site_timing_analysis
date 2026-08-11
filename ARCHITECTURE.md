@@ -70,16 +70,22 @@ explicit three-digit site ID
   -> console and optional sanitized JSON (no acquisition or database reads)
 ```
 
-The durable analytical store is a post-pipeline consumer and does not alter
-pipeline execution or publication gates:
+The durable analytical store has two explicit roles. Post-run imports are the
+only write path; the validated runner may opt into exact read-only reuse without
+changing publication gates:
 
 ```text
 validated Backend/ + Report/ run artifacts
   -> analytical_store.py complete pre-transaction validation
   -> explicit cross-site SQLite import with source/parser/config history
   -> canonical events + unrounded detailed intervals as analytical truth
-  -> SQL views for state totals, latest versions, run status, and wide timing
-  -> clock-formatted, one-decimal 20-column CSV at the export boundary
+  -> SQL views/exports for wide, long, comparison, and run/site summaries
+
+validated source candidate + timing-log dependency
+  -> SHA-256 exact cache key (source + timing log/absence + parser + config + contract)
+  -> timeline_cache.py read-only hit/miss/invalid decision
+  -> standard normalized/enriched/labeled/interval writers
+  -> unchanged identity, interval, plot, reconciliation, and publication gates
 ```
 
 `first_slice_cli.py` is the staged-pipeline orchestrator. It coordinates the
@@ -138,14 +144,25 @@ embedding the implementation of each stage.
   It uses remote listing and local filesystem metadata only; it does not call
   download, extraction, SQLite, staging, or source-write paths.
 - `analytical_store.py` owns schema migrations and the explicit post-run
-  `init`, `import-run`, `export-wide`, and `list-runs` operations. Schema v1
-  stores parser provenance, source observations, run/case status, full endpoint
-  provenance, state-labeled canonical events, detailed intervals, imported wide
-  snapshots, validation, and reconciliation history. It validates all run
-  artifacts and source metadata before a transaction, reuses only an identical
-  source/parser/configuration case analysis, and rejects deterministic conflicts
-  or changed content under an existing run ID. It does not participate in live
-  pipeline parsing or acquisition.
+  `init`, `import-run`, `export-wide`, `export-long`, `compare-runs`,
+  `summarize-runs`, and `list-runs` operations. Schema v1 stores parser
+  provenance, source observations, run/case status, full endpoint provenance,
+  state-labeled canonical events, detailed intervals, imported wide snapshots,
+  validation, and reconciliation history. Schema v2 adds exact analysis-input,
+  timing-log/absence, cache-contract, configuration, and materialization
+  metadata. Imports validate every artifact and source before a transaction,
+  reuse only an identical source/parser/configuration analysis, and reject
+  changed content under an existing run ID. It does not acquire source data or
+  write automatically during pipeline execution.
+- `timeline_cache.py` validates one explicit store read-only, hashes already-
+  resolved source inputs, and returns exact hit/miss/invalid decisions. Hits
+  reconstruct typed events and intervals for the standard writers. An invalid
+  case entry falls back to normal parsing; store-level schema, integrity, or
+  foreign-key failure aborts cache-enabled execution.
+- `store_upgrade.py` owns schema copy-up. It requires stopped OneDrive sync,
+  uses SQLite backup into a sibling temporary database, verifies deterministic
+  legacy content and migration checksums, closes all connections, and swaps
+  files atomically without overwriting an unrelated destination.
 - `store_relocation.py` owns rollback-safe store movement and post-sync
   verification. It uses SQLite backup rather than file copying, deterministic
   schema/data hashing, staged non-overwriting publication, explicit source-file
@@ -173,6 +190,8 @@ or normalization modules.
   every downstream export.
 - Clinical-derived analytical stores and their exports must use an explicit
   path outside both the repository and imported run directories.
+- Pipeline cache mode defaults to off. Read-only reuse requires an explicit
+  store path, and successful runs are seeded only by a later explicit import.
 - The sole operational store is
   `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite`.
   It uses `DELETE` journaling and one workstation may write it. Other OneDrive-
@@ -182,7 +201,9 @@ or normalization modules.
 ## Deferred Work
 
 - Formal parity diffing against historical R outputs.
-- Pipeline cache lookup/reuse and broader SQL-native reports/comparisons on top
-  of the phase-1 analytical store.
+- Verified reuse of an identical pre-execution test baseline; live validation
+  remains the default until snapshot invalidation and parity are proven.
+- Cache/source-hash and plot optimization only after post-preflight profiling
+  identifies a repeatable bottleneck.
 - Splitting large compatibility/reporting modules after interface behavior is
   stabilized and covered by the test suite.

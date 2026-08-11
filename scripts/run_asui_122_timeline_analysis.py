@@ -39,10 +39,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from site_timing_analysis.config import build_run_config  # noqa: E402
+from site_timing_analysis.analytical_store import analysis_configuration  # noqa: E402
 from site_timing_analysis.discovery import discover_cases  # noqa: E402
 from site_timing_analysis.first_slice_cli import run_first_slice  # noqa: E402
 from site_timing_analysis.output_layout import output_layout  # noqa: E402
 from site_timing_analysis.profiling import PerformanceProfiler  # noqa: E402
+from site_timing_analysis.timeline_cache import TimelineCacheReader  # noqa: E402
 from site_timing_analysis.timing_gantt_deliverables import (  # noqa: E402
     PHASE_ORDER,
     PHASE_STATE_MAP,
@@ -117,7 +119,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Collect temporary wall-clock/CPU profiling reports under Backend/reports.",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--database",
+        default=None,
+        help="Explicit analytical-store path; required only for read-only cache mode.",
+    )
+    parser.add_argument(
+        "--cache-mode",
+        choices=("off", "read-only"),
+        default="off",
+        help="Opt-in exact analytical-store cache lookup. Default: off.",
+    )
+    args = parser.parse_args(argv)
+    if args.cache_mode == "read-only" and not args.database:
+        parser.error("--database is required when --cache-mode=read-only")
+    if args.database and args.cache_mode == "off":
+        parser.error("--database requires --cache-mode=read-only")
+    return args
 
 
 def _backend_root(run_dir: Path) -> Path:
@@ -1270,6 +1288,8 @@ def run_analysis(
     case_list_path: Path | None,
     canonical_prefix: str | None,
     publish_partial: bool,
+    database_path: Path | None = None,
+    cache_mode: str = "off",
     profile: bool = False,
     performance_profiler: PerformanceProfiler | None = None,
 ) -> dict[str, Any]:
@@ -1300,6 +1320,19 @@ def run_analysis(
         performance_profiler=performance_profiler,
     )
     selected_ids = discovery["selected_case_ids"]
+    cache_reader: TimelineCacheReader | None = None
+    if cache_mode == "read-only":
+        if database_path is None:
+            raise ValueError("Read-only cache mode requires an explicit database path.")
+        _, configuration_fingerprint = analysis_configuration(
+            year_selection="All",
+            canonical_prefix=str(discovery["canonical_prefix"]),
+        )
+        cache_reader = TimelineCacheReader(
+            database=database_path,
+            site_code=site_code,
+            configuration_fingerprint_sha256=configuration_fingerprint,
+        )
     with _profile_stage(performance_profiler, "validation and reconciliation"):
         mapping = _state_mapping_validation()
     candidate_audit = _validate_candidates(
@@ -1361,6 +1394,7 @@ def run_analysis(
                 str(diagnostics_path),
             ],
             performance_profiler=performance_profiler,
+            cache_reader=cache_reader,
         )
         pipeline_manifest = {
             "cases_discovered": pipeline_manifest_obj.cases_discovered,
@@ -1389,6 +1423,27 @@ def run_analysis(
         source_integrity = _check_database_source_integrity(candidate_audit, run_dir)
     if source_integrity["failures"]:
         global_failures.extend(source_integrity["failures"])
+
+    cache_summary: dict[str, Any] | None = None
+    if cache_reader is not None:
+        cache_summary = cache_reader.summary()
+        with _profile_artifact_write(performance_profiler, subtype="report generation"):
+            _write_json(layout.reports_dir / "cache_summary.json", cache_summary)
+        with _profile_artifact_write(performance_profiler, subtype="CSV export"):
+            _write_csv(
+                layout.reports_dir / "cache_by_case.csv",
+                [
+                    "case_id",
+                    "status",
+                    "reason",
+                    "duration_seconds",
+                    "input_fingerprint_sha256",
+                    "source_sha256",
+                    "timing_log_sha256",
+                    "case_analysis_id",
+                ],
+                list(cache_summary["cases"]),
+            )
 
     with _profile_stage(performance_profiler, "validation and reconciliation"):
         rollup = _rollup_index(rollup_path, site_code=site_code, case_ids=selected_ids)
@@ -1614,6 +1669,7 @@ def run_analysis(
                     "final_csv": str(final_csv) if final_csv.exists() else None,
                     "staged_csv": str(staged_csv) if staged_csv.exists() else None,
                     "report": str(report_path),
+                    "cache": cache_summary,
                 },
             )
     with _profile_artifact_write(performance_profiler, subtype="CSV export"):
@@ -1646,6 +1702,7 @@ def run_analysis(
         "staged_csv": staged_csv if staged_csv.exists() else None,
         "report": report_path,
         "performance": performance_paths,
+        "cache": cache_summary,
     }
 
 
@@ -1661,6 +1718,9 @@ def main(
     run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else _default_run_dir(site_code).resolve()
     rollup_path = Path(args.rollup).expanduser().resolve() if args.rollup else _default_rollup(site_code)
     case_list_path = Path(args.case_list).expanduser().resolve() if args.case_list else None
+    database_path = (
+        Path(args.database).expanduser().resolve() if args.database else None
+    )
     performance_profiler: PerformanceProfiler | None = None
     if args.profile:
         wall_started = _PROCESS_WALL_STARTED if process_wall_started is None else process_wall_started
@@ -1685,6 +1745,8 @@ def main(
             case_list_path=case_list_path,
             canonical_prefix=args.canonical_prefix,
             publish_partial=args.publish_partial,
+            database_path=database_path,
+            cache_mode=args.cache_mode,
             profile=args.profile,
             performance_profiler=performance_profiler,
         )

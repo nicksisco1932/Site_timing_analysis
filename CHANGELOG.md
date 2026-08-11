@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-08-11 - Durable Timeline Analysis Store Phase 2
+
+- Added a validated schema-v2 copy-up migration that records exact clinical
+  source/ZIP-member and timing-log dependencies, including explicit absence,
+  plus parser, configuration, and cache-contract fingerprints. Schema-v1
+  analyses remain historical and cache-ineligible.
+- Added opt-in `--cache-mode read-only --database <path>` to the validated
+  Timeline Analysis runner. Exact hits reconstruct normalized, enriched,
+  labeled, interval, plot, report, and public artifacts through the standard
+  writers and unchanged validation/publication gates. Default behavior remains
+  cache-off; store import remains separate and explicit.
+- Added sanitized cache hit/miss/invalid diagnostics. Corrupt case entries fall
+  back to source parsing, while store schema/integrity/foreign-key failures abort
+  cache-enabled execution.
+- Added deterministic SQL `export-long`, `compare-runs`, and `summarize-runs`
+  reports using unrounded detailed intervals as the source of truth.
+- Live acceptance achieved 9/9 ASUI and 5/5 UCLA exact hits with byte-identical
+  public CSV, event, interval, plot, and reconciliation artifacts. Source
+  hashes, sizes, and modification times remained unchanged; SQL reports and
+  wide exports reconciled to both source runs.
+- Reconciled profiling at greater than 99.9989% for three repeated disabled,
+  mixed, and all-hit four-case benchmarks. The mandatory repository-test
+  preflight dominated total wall time, so no performance optimization was added;
+  a verified reusable preflight snapshot is the next measured target.
+
 ## 2026-08-11 - Durable Timeline Analysis Store Phase 1
 
 - Added a schema-versioned, cross-site SQLite analytical store with checksummed

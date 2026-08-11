@@ -31,21 +31,30 @@ from site_timing_analysis.analytical_store import (
     REQUESTED_STATES,
     WIDE_HEADERS,
     ParserVersion,
+    analysis_configuration,
+    compare_runs,
+    export_long,
     export_wide,
     import_prepared_run,
     import_run,
     initialize_database,
     list_runs,
     prepare_run_import,
+    summarize_runs,
     validate_database_path,
 )
+from site_timing_analysis.models import DatabaseSourceRecord
+from site_timing_analysis.first_slice_cli import run_first_slice
+from site_timing_analysis.timeline_cache import TimelineCacheReader
 from site_timing_analysis import store_relocation
+from site_timing_analysis import store_upgrade
 from site_timing_analysis.store_relocation import (
     capture_database_snapshot,
     logical_database_hash,
     relocate_store,
     verify_relocated_store,
 )
+from testing.synthetic_test_db import create_synthetic_test_db
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +82,11 @@ def _write_csv(path: Path, fields: tuple[str, ...], rows: list[dict[str, Any]]) 
         writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _build_run(
@@ -348,6 +362,8 @@ def _table_counts(database: Path) -> dict[str, int]:
         "source_artifacts",
         "analysis_runs",
         "case_analyses",
+        "case_analysis_cache_entries",
+        "case_analysis_inputs",
         "run_cases",
         "source_observations",
         "canonical_events",
@@ -366,17 +382,23 @@ def test_initialization_is_versioned_transactional_and_reopenable(tmp_path: Path
     initialize_database(database)
 
     with _connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-        migration = connection.execute(
-            "SELECT version, name, checksum_sha256 FROM schema_migrations"
-        ).fetchone()
-        assert tuple(migration[:2]) == (1, "initial_timeline_store")
-        assert migration["checksum_sha256"] == analytical_store._migration_checksum()
+        migrations = connection.execute(
+            "SELECT version, name, checksum_sha256 FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        assert [tuple(row[:2]) for row in migrations] == [
+            (1, "initial_timeline_store"),
+            (2, "exact_case_cache_inputs"),
+        ]
+        assert [row["checksum_sha256"] for row in migrations] == [
+            analytical_store._migration_checksum(1),
+            analytical_store._migration_checksum(2),
+        ]
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         connection.execute(
-            "UPDATE schema_migrations SET checksum_sha256 = 'INVALID' WHERE version = 1"
+            "UPDATE schema_migrations SET checksum_sha256 = 'INVALID' WHERE version = 2"
         )
     with pytest.raises(AnalyticalStoreError, match="checksum"):
         initialize_database(database)
@@ -430,6 +452,34 @@ def test_complete_import_export_raw_payload_and_idempotency(tmp_path: Path) -> N
     assert rows[0]["endtime"] == "10:01:05 AM"
     assert rows[0]["TULSA QA"] == "1.1"
     assert list_runs(database)[0]["published_case_count"] == 1
+
+
+def test_import_accepts_empty_reconciliation_without_comparator(tmp_path: Path) -> None:
+    run_dir = _build_run(tmp_path, run_id="no-comparator-run")
+    _write_csv(
+        run_dir / "Backend" / "reports" / "phase_reconciliation.csv",
+        (
+            "case_id",
+            "phase",
+            "detailed_minutes_unrounded",
+            "rollup_minutes",
+            "difference_minutes",
+            "status",
+            "failure_type",
+        ),
+        [],
+    )
+    database = tmp_path / "store" / "timeline.sqlite"
+    initialize_database(database)
+
+    result = import_run(database, run_dir, parser_version=_parser())
+
+    assert result.status == "IMPORTED"
+    assert result.reconciliation_rows == 0
+    with _connect(database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM reconciliation_results"
+        ).fetchone()[0] == 0
 
 
 def test_partial_run_retains_failed_case_and_exports_only_successes(tmp_path: Path) -> None:
@@ -823,3 +873,346 @@ def test_relocation_requires_stopped_onedrive_and_rejects_sidecars(
             pin_destination=False,
         )
     assert source_database.is_file()
+
+
+def _cache_source(run_dir: Path, case_id: str = "001_01-001") -> DatabaseSourceRecord:
+    source_path = run_dir.parent / "sources" / case_id / "local.db"
+    return DatabaseSourceRecord(
+        case_id=case_id,
+        case_path=source_path.parent,
+        source_type="unzipped",
+        source_path=source_path,
+        selected_zip_member=None,
+        resolution_rule="synthetic_test",
+    )
+
+
+def test_schema_v2_copy_up_preserves_v1_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "store" / "timeline.sqlite"
+    database.parent.mkdir()
+    connection = analytical_store._open_database(database)
+    try:
+        analytical_store._apply_schema_migration(connection, 1)
+        connection.execute(
+            "INSERT INTO sites (site_code, first_seen_at_utc) VALUES (?, ?)",
+            ("TEST_001", "2026-08-11T00:00:00+00:00"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    monkeypatch.setattr(store_upgrade, "onedrive_process_running", lambda: False)
+
+    result = store_upgrade.upgrade_database_copy(
+        database,
+        confirm_onedrive_stopped=True,
+        cleanup_backup=True,
+        require_pinned=False,
+    )
+
+    assert result["status"] == "UPGRADED"
+    assert result["before"]["legacy_content_sha256"] == result["after"][
+        "legacy_content_sha256"
+    ]
+    assert result["backup_removed"] is True
+    with _connect(database) as upgraded:
+        assert upgraded.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert upgraded.execute("SELECT COUNT(*) FROM sites").fetchone()[0] == 1
+        assert upgraded.execute(
+            "SELECT COUNT(*) FROM case_analysis_cache_entries"
+        ).fetchone()[0] == 0
+    assert not Path(str(database) + "-wal").exists()
+    assert not Path(str(database) + "-shm").exists()
+
+
+def test_exact_cache_hit_and_all_invalidation_dimensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _build_run(tmp_path / "runs", run_id="cache-run")
+    database = tmp_path / "store" / "timeline.sqlite"
+    parser = _parser("cache-parser")
+    initialize_database(database)
+    prepared = prepare_run_import(run_dir, parser_version=parser)
+    import_prepared_run(database, prepared)
+    source = _cache_source(run_dir)
+
+    reader = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256=prepared.configuration_fingerprint_sha256,
+        parser_version=parser,
+    )
+    hit = reader.lookup(case_id=source.case_id, source=source, timing_log_path=None)
+    assert hit.status == "HIT", hit.reason
+    assert hit.artifacts is not None
+    assert len(hit.artifacts.state_labeled_events) == 1
+    assert len(hit.artifacts.state_intervals) == 1
+    assert len(hit.artifacts.normalized_events) == 1
+
+    timing_log = tmp_path / "timing.csv"
+    timing_log.write_text("label,time\nQA,10:00\n", encoding="utf-8")
+    assert reader.lookup(
+        case_id=source.case_id, source=source, timing_log_path=timing_log
+    ).status == "MISS"
+
+    parser_miss = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256=prepared.configuration_fingerprint_sha256,
+        parser_version=_parser("changed-parser"),
+    )
+    assert parser_miss.lookup(
+        case_id=source.case_id, source=source, timing_log_path=None
+    ).status == "MISS"
+
+    configuration_miss = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256="F" * 64,
+        parser_version=parser,
+    )
+    assert configuration_miss.lookup(
+        case_id=source.case_id, source=source, timing_log_path=None
+    ).status == "MISS"
+
+    import site_timing_analysis.timeline_cache as timeline_cache
+
+    monkeypatch.setattr(timeline_cache, "CACHE_CONTRACT_VERSION", 2)
+    contract_miss = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256=prepared.configuration_fingerprint_sha256,
+        parser_version=parser,
+    )
+    assert contract_miss.lookup(
+        case_id=source.case_id, source=source, timing_log_path=None
+    ).status == "MISS"
+
+    source.source_path.write_bytes(source.source_path.read_bytes() + b"changed")
+    monkeypatch.setattr(timeline_cache, "CACHE_CONTRACT_VERSION", 1)
+    assert reader.lookup(
+        case_id=source.case_id, source=source, timing_log_path=None
+    ).status == "MISS"
+
+
+def test_invalid_cache_entry_falls_back_as_typed_invalid(tmp_path: Path) -> None:
+    run_dir = _build_run(tmp_path / "runs", run_id="invalid-cache-run")
+    database = tmp_path / "store" / "timeline.sqlite"
+    parser = _parser("cache-parser")
+    initialize_database(database)
+    prepared = prepare_run_import(run_dir, parser_version=parser)
+    import_prepared_run(database, prepared)
+    reader = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256=prepared.configuration_fingerprint_sha256,
+        parser_version=parser,
+    )
+    with _connect(database) as connection:
+        connection.execute(
+            "UPDATE canonical_events SET raw_payload_json = 'not-json' WHERE event_ordinal = 1"
+        )
+    result = reader.lookup(
+        case_id="001_01-001", source=_cache_source(run_dir), timing_log_path=None
+    )
+    assert result.status == "INVALID"
+    assert result.reason.startswith("cache_entry_invalid:")
+
+
+def test_cache_materialization_restores_normalized_source_order() -> None:
+    import site_timing_analysis.timeline_cache as timeline_cache
+
+    rows = []
+    for row_number, timestamp in ((8, "2026-01-01T08:00:00"), (2, "2026-01-01T08:01:00")):
+        row = dict.fromkeys(EVENT_FIELDS, "")
+        row.update(
+            {
+                "case_id": "001_01-001",
+                "timestamp": timestamp,
+                "event_type": "SyntheticEvent",
+                "source": "auditlog",
+                "is_synthetic": "False",
+                "row_number": str(row_number),
+                "raw_payload_json": "{}",
+            }
+        )
+        rows.append(row)
+
+    normalized, enriched, labeled = timeline_cache._materialize_event_models(rows)
+
+    assert [event.row_number for event in normalized] == [2, 8]
+    assert [event.row_number for event in enriched] == [8, 2]
+    assert [event.row_number for event in labeled] == [8, 2]
+
+
+def test_first_slice_materializes_exact_cache_hit_without_opening_source_database(
+    tmp_path: Path,
+) -> None:
+    case_id = "001_01-001"
+    site_root = tmp_path / "site"
+    source_path = site_root / case_id / "local.db"
+    run_dir = _build_run(
+        tmp_path / "seed_runs",
+        run_id="seed-run",
+        source_paths={case_id: source_path},
+    )
+    database = tmp_path / "store" / "timeline.sqlite"
+    parser = _parser("cache-parser")
+    initialize_database(database)
+    prepared = prepare_run_import(run_dir, parser_version=parser)
+    import_prepared_run(database, prepared)
+    _, configuration_fingerprint = analysis_configuration(
+        year_selection="All", canonical_prefix="001_"
+    )
+    reader = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256=configuration_fingerprint,
+        parser_version=parser,
+    )
+    selection = tmp_path / "selected.txt"
+    selection.write_text(case_id + "\n", encoding="utf-8")
+    output = tmp_path / "cached_run"
+
+    manifest = run_first_slice(
+        [
+            "--site",
+            "TEST_001",
+            "--years",
+            "All",
+            "--root",
+            str(tmp_path),
+            "--site-path",
+            str(site_root),
+            "--output",
+            str(output),
+            "--case-id-file",
+            str(selection),
+        ],
+        cache_reader=reader,
+    )
+
+    assert manifest.cases_processed == 1
+    assert manifest.cases_failed == 0
+    assert manifest.case_results[0]["cache_status"] == "HIT"
+    assert reader.summary()["counts"] == {"HIT": 1, "MISS": 0, "INVALID": 0}
+    assert (output / "events" / "state_labeled" / f"{case_id}_state_labeled_events.csv").is_file()
+    assert (output / "intervals" / "state" / f"{case_id}_state_intervals.csv").is_file()
+
+
+def test_first_slice_parses_source_after_invalid_cache_entry(tmp_path: Path) -> None:
+    case_id = "001_01-001"
+    site_root = tmp_path / "site"
+    source_path = create_synthetic_test_db(site_root / case_id / "local.db")
+    run_dir = _build_run(
+        tmp_path / "seed_runs",
+        run_id="invalid-fallback-seed",
+        source_paths={case_id: source_path},
+    )
+    database = tmp_path / "store" / "timeline.sqlite"
+    parser = _parser("cache-parser")
+    initialize_database(database)
+    prepared = prepare_run_import(run_dir, parser_version=parser)
+    import_prepared_run(database, prepared)
+    with _connect(database) as connection:
+        connection.execute(
+            "UPDATE canonical_events SET raw_payload_json = 'not-json' WHERE event_ordinal = 1"
+        )
+
+    _, configuration_fingerprint = analysis_configuration(
+        year_selection="All", canonical_prefix="001_"
+    )
+    reader = TimelineCacheReader(
+        database=database,
+        site_code="TEST_001",
+        configuration_fingerprint_sha256=configuration_fingerprint,
+        parser_version=parser,
+    )
+    selection = tmp_path / "selected.txt"
+    selection.write_text(case_id + "\n", encoding="utf-8")
+
+    manifest = run_first_slice(
+        [
+            "--site",
+            "TEST_001",
+            "--years",
+            "All",
+            "--root",
+            str(tmp_path),
+            "--site-path",
+            str(site_root),
+            "--output",
+            str(tmp_path / "fallback_run"),
+            "--case-id-file",
+            str(selection),
+        ],
+        cache_reader=reader,
+    )
+
+    assert manifest.cases_processed == 1
+    assert manifest.cases_failed == 0
+    assert manifest.case_results[0]["cache_status"] == "INVALID"
+    assert manifest.case_results[0]["raw_event_count"] > 0
+    assert reader.summary()["counts"] == {"HIT": 0, "MISS": 0, "INVALID": 1}
+
+
+def test_sql_native_long_compare_and_summary_exports(tmp_path: Path) -> None:
+    run_dir = _build_run(tmp_path / "runs", run_id="report-run")
+    database = tmp_path / "store" / "timeline.sqlite"
+    initialize_database(database)
+    import_run(database, run_dir, parser_version=_parser())
+    output_root = tmp_path / "external_reports"
+
+    long_result = export_long(database, "report-run", output_root / "long.csv")
+    compare_result = compare_runs(
+        database,
+        "report-run",
+        "report-run",
+        output_root / "compare.csv",
+    )
+    summary_result = summarize_runs(
+        database,
+        ["report-run"],
+        output_root / "summary.csv",
+    )
+
+    assert long_result["row_count"] == len(REQUESTED_STATES)
+    assert compare_result["row_count"] == len(REQUESTED_STATES)
+    assert summary_result["row_count"] == len(REQUESTED_STATES)
+    long_rows = _read_csv_rows(output_root / "long.csv")
+    assert [row["state"] for row in long_rows] == list(REQUESTED_STATES)
+    assert all("T" in row["start_timestamp_iso"] for row in long_rows)
+    compare_rows = _read_csv_rows(output_root / "compare.csv")
+    assert {row["status"] for row in compare_rows} == {"MATCHED"}
+    assert {float(row["difference_minutes_unrounded"]) for row in compare_rows} == {0.0}
+    summary_rows = _read_csv_rows(output_root / "summary.csv")
+    assert {int(row["case_count"]) for row in summary_rows} == {1}
+
+
+def test_compare_runs_reports_cases_missing_from_each_side(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    baseline = _build_run(
+        runs_root,
+        run_id="baseline",
+        successful_ids=("001_01-001",),
+    )
+    comparison = _build_run(
+        runs_root,
+        run_id="comparison",
+        successful_ids=("001_01-002",),
+    )
+    database = tmp_path / "store" / "timeline.sqlite"
+    initialize_database(database)
+    import_run(database, baseline, parser_version=_parser())
+    import_run(database, comparison, parser_version=_parser())
+    output = tmp_path / "reports" / "missing.csv"
+
+    result = compare_runs(database, "baseline", "comparison", output)
+    rows = _read_csv_rows(output)
+
+    assert result["row_count"] == len(REQUESTED_STATES) * 2
+    assert {row["status"] for row in rows} == {
+        "MISSING_BASELINE",
+        "MISSING_COMPARISON",
+    }

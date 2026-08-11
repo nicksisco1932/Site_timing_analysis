@@ -36,13 +36,15 @@ import logging
 import math
 from pathlib import Path
 import sqlite3
+import statistics
 import subprocess
 from typing import Any, Iterable
 
 from .timing_gantt_deliverables import PHASE_ORDER, PHASE_STATE_MAP
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+CACHE_CONTRACT_VERSION = 1
 STORE_NAME = "timeline_analysis"
 LOGGER = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -109,6 +111,24 @@ INTERVAL_FIELDS = (
     "insertion_rule",
     "raw_payload_json",
 )
+CASE_CACHE_METADATA_FIELDS = (
+    "raw_event_count",
+    "normalized_event_count",
+    "dropped_event_count",
+    "timing_log_entry_count",
+    "session_synthetic_count",
+    "timing_log_synthetic_count",
+    "enriched_event_count",
+    "state_labeled_event_count",
+    "state_assignment_warning_count",
+    "state_warnings",
+    "state_interval_count",
+    "timing_warning_count",
+    "timing_warnings",
+    "plot_warning_count",
+    "plot_warnings",
+    "enrichment_warnings",
+)
 PARSER_SOURCE_PATHS = (
     "src/site_timing_analysis/models.py",
     "src/site_timing_analysis/discovery.py",
@@ -119,6 +139,8 @@ PARSER_SOURCE_PATHS = (
     "src/site_timing_analysis/timing_log.py",
     "src/site_timing_analysis/state_machine.py",
     "src/site_timing_analysis/timing.py",
+    "src/site_timing_analysis/first_slice_cli.py",
+    "src/site_timing_analysis/timeline_cache.py",
     "src/site_timing_analysis/timing_gantt_deliverables.py",
     "scripts/run_asui_122_timeline_analysis.py",
 )
@@ -164,6 +186,10 @@ class PreparedCase:
     intervals: list[dict[str, str]] | None = None
     wide_snapshot: dict[str, str] | None = None
     validation_rows: list[dict[str, str]] | None = None
+    input_fingerprint_sha256: str = ""
+    case_configuration_fingerprint_sha256: str = ""
+    analysis_inputs: list[dict[str, Any]] | None = None
+    cache_metadata_json: str = "{}"
 
 
 @dataclass
@@ -537,8 +563,84 @@ def _schema_sql() -> str:
     """
 
 
-def _migration_checksum() -> str:
-    return _sha256_bytes(_schema_sql().encode("utf-8"))
+def _schema_v2_sql() -> str:
+    return """
+        CREATE TABLE case_analysis_cache_entries (
+            case_analysis_id INTEGER PRIMARY KEY
+                REFERENCES case_analyses(case_analysis_id) ON DELETE CASCADE,
+            cache_contract_version INTEGER NOT NULL CHECK (cache_contract_version > 0),
+            input_fingerprint_sha256 TEXT NOT NULL,
+            case_configuration_fingerprint_sha256 TEXT NOT NULL,
+            case_result_metadata_json TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+
+        CREATE TABLE case_analysis_inputs (
+            case_analysis_id INTEGER NOT NULL
+                REFERENCES case_analyses(case_analysis_id) ON DELETE CASCADE,
+            input_role TEXT NOT NULL,
+            input_ordinal INTEGER NOT NULL CHECK (input_ordinal >= 0),
+            present INTEGER NOT NULL CHECK (present IN (0, 1)),
+            source_type TEXT NOT NULL,
+            observed_path TEXT NOT NULL,
+            archive_member TEXT NOT NULL,
+            size_bytes INTEGER CHECK (size_bytes IS NULL OR size_bytes >= 0),
+            mtime_ns INTEGER,
+            sha256 TEXT,
+            PRIMARY KEY (case_analysis_id, input_role, input_ordinal),
+            CHECK (
+                (present = 0 AND size_bytes IS NULL AND mtime_ns IS NULL AND sha256 IS NULL)
+                OR
+                (present = 1 AND size_bytes IS NOT NULL AND mtime_ns IS NOT NULL AND sha256 IS NOT NULL)
+            )
+        );
+
+        CREATE INDEX idx_cache_entries_lookup
+            ON case_analysis_cache_entries (
+                cache_contract_version,
+                input_fingerprint_sha256,
+                case_configuration_fingerprint_sha256
+            );
+        CREATE INDEX idx_analysis_inputs_sha256
+            ON case_analysis_inputs (sha256);
+
+        CREATE VIEW v_cacheable_case_analyses AS
+        SELECT
+            ca.case_analysis_id,
+            c.site_code,
+            c.case_id,
+            sa.source_type,
+            sa.archive_member,
+            sa.sha256 AS source_sha256,
+            pv.source_fingerprint_sha256 AS parser_fingerprint_sha256,
+            ce.cache_contract_version,
+            ce.input_fingerprint_sha256,
+            ce.case_configuration_fingerprint_sha256,
+            ce.case_result_metadata_json,
+            ca.start_timestamp_iso,
+            ca.end_timestamp_iso,
+            ca.start_provenance_json,
+            ca.end_provenance_json,
+            ca.analysis_artifact_fingerprint_sha256
+        FROM case_analysis_cache_entries ce
+        JOIN case_analyses ca ON ca.case_analysis_id = ce.case_analysis_id
+        JOIN cases c ON c.case_pk = ca.case_pk
+        JOIN source_artifacts sa ON sa.source_artifact_id = ca.source_artifact_id
+        JOIN parser_versions pv ON pv.parser_version_id = ca.parser_version_id
+        WHERE ca.status = 'PASS';
+    """
+
+
+def _migration_sql(version: int) -> str:
+    if version == 1:
+        return _schema_sql()
+    if version == 2:
+        return _schema_v2_sql()
+    raise AnalyticalStoreError(f"Unsupported analytical migration version: {version}")
+
+
+def _migration_checksum(version: int = SCHEMA_VERSION) -> str:
+    return _sha256_bytes(_migration_sql(version).encode("utf-8"))
 
 
 def _open_database(path: Path, *, read_only: bool = False) -> sqlite3.Connection:
@@ -562,26 +664,52 @@ def _open_database(path: Path, *, read_only: bool = False) -> sqlite3.Connection
     return connection
 
 
-def _verify_schema(connection: sqlite3.Connection) -> None:
+def _verify_schema(
+    connection: sqlite3.Connection, *, expected_version: int = SCHEMA_VERSION
+) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-    if version != SCHEMA_VERSION:
+    if version != expected_version:
         raise AnalyticalStoreError(
-            f"Unsupported analytical schema version {version}; expected {SCHEMA_VERSION}."
+            f"Unsupported analytical schema version {version}; expected {expected_version}."
         )
-    row = connection.execute(
-        "SELECT checksum_sha256 FROM schema_migrations WHERE version = ?",
-        (SCHEMA_VERSION,),
-    ).fetchone()
-    if row is None or row["checksum_sha256"] != _migration_checksum():
-        raise AnalyticalStoreError(
-            "Schema migration checksum does not match this application version."
-        )
+    for migration_version in range(1, expected_version + 1):
+        row = connection.execute(
+            "SELECT checksum_sha256 FROM schema_migrations WHERE version = ?",
+            (migration_version,),
+        ).fetchone()
+        if row is None or row["checksum_sha256"] != _migration_checksum(migration_version):
+            raise AnalyticalStoreError(
+                "Schema migration checksum does not match this application version "
+                f"for migration {migration_version}."
+            )
     if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise AnalyticalStoreError("SQLite foreign-key enforcement is not enabled.")
 
 
+def _apply_schema_migration(connection: sqlite3.Connection, version: int) -> None:
+    checksum = _migration_checksum(version).replace("'", "''")
+    name = {
+        1: "initial_timeline_store",
+        2: "exact_case_cache_inputs",
+    }[version]
+    script = (
+        "BEGIN IMMEDIATE;\n"
+        + _migration_sql(version)
+        + "\nINSERT INTO schema_migrations "
+        "(version, name, checksum_sha256, applied_at_utc) VALUES "
+        f"({version}, '{name}', '{checksum}', '{_utc_now()}');\n"
+        f"PRAGMA user_version = {version};\nCOMMIT;"
+    )
+    try:
+        connection.executescript(script)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
 def initialize_database(database: Path) -> Path:
-    """Create schema v1 or verify an existing compatible database."""
+    """Create the latest schema or verify an existing compatible database."""
     target = validate_database_path(database)
     LOGGER.info("Initializing or verifying analytical store: %s", target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -590,29 +718,16 @@ def initialize_database(database: Path) -> Path:
     try:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version == 0 and not existed:
-            checksum = _migration_checksum()
-            safe_checksum = checksum.replace("'", "''")
-            script = (
-                "BEGIN IMMEDIATE;\n"
-                + _schema_sql()
-                + "\nINSERT INTO schema_migrations "
-                "(version, name, checksum_sha256, applied_at_utc) VALUES "
-                f"(1, 'initial_timeline_store', '{safe_checksum}', '{_utc_now()}');\n"
-                "PRAGMA user_version = 1;\nCOMMIT;"
-            )
-            try:
-                connection.executescript(script)
-            except Exception:
-                if connection.in_transaction:
-                    connection.rollback()
-                raise
+            for migration_version in range(1, SCHEMA_VERSION + 1):
+                _apply_schema_migration(connection, migration_version)
         elif version == 0 and existed:
             raise AnalyticalStoreError(
                 f"Existing file is not an initialized {STORE_NAME} database: {target}"
             )
         elif version != SCHEMA_VERSION:
             raise AnalyticalStoreError(
-                f"Unsupported analytical schema version {version}; expected {SCHEMA_VERSION}."
+                f"Unsupported analytical schema version {version}; expected {SCHEMA_VERSION}. "
+                "Use the explicit copy-up upgrade command for an older store."
             )
         _verify_schema(connection)
     finally:
@@ -753,13 +868,27 @@ def _analysis_artifact_fingerprint(
     events: list[dict[str, str]],
     intervals: list[dict[str, str]],
 ) -> str:
+    canonical_events = []
+    for row in events:
+        normalized = dict(row)
+        normalized["raw_payload_json"] = json.loads(
+            str(row.get("raw_payload_json", "{}") or "{}")
+        )
+        canonical_events.append(normalized)
+    canonical_intervals = []
+    for row in intervals:
+        normalized = dict(row)
+        normalized["raw_payload_json"] = json.loads(
+            str(row.get("raw_payload_json", "{}") or "{}")
+        )
+        canonical_intervals.append(normalized)
     payload = {
         "start_timestamp_iso": start_timestamp_iso,
         "end_timestamp_iso": end_timestamp_iso,
         "start_provenance_json": json.loads(start_provenance_json),
         "end_provenance_json": json.loads(end_provenance_json),
-        "events": events,
-        "intervals": intervals,
+        "events": canonical_events,
+        "intervals": canonical_intervals,
     }
     return _sha256_bytes(_canonical_json(payload).encode("utf-8"))
 
@@ -907,6 +1036,94 @@ def _artifact_path(path_value: str, *, run_dir: Path, context: str) -> Path:
     return resolved
 
 
+def _present_analysis_input(
+    *,
+    role: str,
+    path: Path,
+    source_type: str,
+    archive_member: str = "",
+    known_sha256: str | None = None,
+) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise AnalyticalStoreError(f"Required {role} input is missing: {resolved}")
+    before = resolved.stat()
+    digest = known_sha256 or _sha256_file(resolved)
+    after = resolved.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise AnalyticalStoreError(f"{role} input changed while hashing: {resolved}")
+    return {
+        "input_role": role,
+        "input_ordinal": 0,
+        "present": True,
+        "source_type": source_type,
+        "observed_path": str(resolved),
+        "archive_member": archive_member,
+        "size_bytes": after.st_size,
+        "mtime_ns": after.st_mtime_ns,
+        "sha256": digest,
+    }
+
+
+def _absent_analysis_input(*, role: str, source_type: str) -> dict[str, Any]:
+    return {
+        "input_role": role,
+        "input_ordinal": 0,
+        "present": False,
+        "source_type": source_type,
+        "observed_path": "",
+        "archive_member": "",
+        "size_bytes": None,
+        "mtime_ns": None,
+        "sha256": None,
+    }
+
+
+def analysis_input_fingerprint(inputs: Iterable[dict[str, Any]]) -> str:
+    identity_rows = [
+        {
+            "input_role": str(row["input_role"]),
+            "input_ordinal": int(row.get("input_ordinal", 0)),
+            "present": bool(row["present"]),
+            "source_type": str(row.get("source_type", "")),
+            "archive_member": str(row.get("archive_member", "")),
+            "sha256": str(row["sha256"]) if row.get("sha256") is not None else None,
+        }
+        for row in inputs
+    ]
+    identity_rows.sort(key=lambda row: (row["input_role"], row["input_ordinal"]))
+    return _sha256_bytes(_canonical_json(identity_rows).encode("utf-8"))
+
+
+def case_configuration_fingerprint(
+    configuration_fingerprint_sha256: str,
+    input_fingerprint_sha256: str,
+    *,
+    cache_contract_version: int = CACHE_CONTRACT_VERSION,
+) -> str:
+    payload = {
+        "cache_contract_version": cache_contract_version,
+        "configuration_fingerprint_sha256": configuration_fingerprint_sha256,
+        "input_fingerprint_sha256": input_fingerprint_sha256,
+    }
+    return _sha256_bytes(_canonical_json(payload).encode("utf-8"))
+
+
+def analysis_configuration(
+    *, year_selection: str, canonical_prefix: str
+) -> tuple[str, str]:
+    payload = {
+        "schema_version": 1,
+        "year_selection": year_selection,
+        "canonical_prefix": canonical_prefix,
+        "requested_states": list(REQUESTED_STATES),
+        "phase_order": list(PHASE_ORDER),
+        "phase_state_map": {phase: list(PHASE_STATE_MAP[phase]) for phase in PHASE_ORDER},
+    }
+    configuration_json = _canonical_json(payload)
+    return configuration_json, _sha256_bytes(configuration_json.encode("utf-8"))
+
+
 def prepare_run_import(
     run_dir: Path,
     *,
@@ -964,6 +1181,11 @@ def prepare_run_import(
         raise AnalyticalStoreError("Execution cases do not match selected case IDs.")
     if set(manifest_cases) != set(selected_ids) or set(audit_cases) != set(selected_ids):
         raise AnalyticalStoreError("Manifest or database audit cases do not match selected case IDs.")
+
+    configuration_json, configuration_fingerprint = analysis_configuration(
+        year_selection=str(manifest.get("year_selection", "")),
+        canonical_prefix=str(discovery.get("canonical_prefix", "")),
+    )
 
     slug = "".join(
         character.lower() if character.isalnum() else "_" for character in site_code
@@ -1062,6 +1284,41 @@ def prepare_run_import(
         if int(usable[0].get("source_mtime_ns", -1)) != source_stat_after.st_mtime_ns:
             raise AnalyticalStoreError(f"Source mtime differs from candidate audit for {case_id}.")
 
+        source_type = str(manifest_case.get("source_type", ""))
+        archive_member = str(usable[0].get("zip_member", "") or "")
+        analysis_inputs = [
+            _present_analysis_input(
+                role="clinical_database",
+                path=source_path,
+                source_type=source_type,
+                archive_member=archive_member,
+                known_sha256=source_hash,
+            )
+        ]
+        timing_log_value = manifest_case.get("timing_log_path")
+        if timing_log_value is None or not str(timing_log_value).strip():
+            analysis_inputs.append(
+                _absent_analysis_input(role="timing_log", source_type="timing_log_csv")
+            )
+        else:
+            analysis_inputs.append(
+                _present_analysis_input(
+                    role="timing_log",
+                    path=Path(str(timing_log_value)),
+                    source_type="timing_log_csv",
+                )
+            )
+        input_fingerprint = analysis_input_fingerprint(analysis_inputs)
+        case_configuration = case_configuration_fingerprint(
+            configuration_fingerprint,
+            input_fingerprint,
+        )
+        cache_metadata = {
+            field: manifest_case.get(field)
+            for field in CASE_CACHE_METADATA_FIELDS
+            if field in manifest_case
+        }
+
         event_path = _artifact_path(
             str(manifest_case.get("state_labeled_export", "")),
             run_dir=run_root,
@@ -1103,9 +1360,9 @@ def prepare_run_import(
                 final_row_included=True,
                 failure_reason=str(execution_case.get("failure_reason", "")),
                 failures_json=_canonical_json(failures),
-                source_type=str(manifest_case.get("source_type", "")),
+                source_type=source_type,
                 source_path=str(source_path),
-                source_archive_member=str(usable[0].get("zip_member", "") or ""),
+                source_archive_member=archive_member,
                 source_size_bytes=source_stat_after.st_size,
                 source_mtime_ns=source_stat_after.st_mtime_ns,
                 source_sha256=source_hash,
@@ -1125,6 +1382,10 @@ def prepare_run_import(
                 intervals=intervals,
                 wide_snapshot=wide_row,
                 validation_rows=_case_validation_rows(execution_case, failures),
+                input_fingerprint_sha256=input_fingerprint,
+                case_configuration_fingerprint_sha256=case_configuration,
+                analysis_inputs=analysis_inputs,
+                cache_metadata_json=_canonical_json(cache_metadata),
             )
         )
 
@@ -1144,9 +1405,10 @@ def prepare_run_import(
     expected_reconciliation_keys = {
         (case_id, phase) for case_id in selected_ids for phase in PHASE_ORDER
     }
-    if reconciliation_keys != expected_reconciliation_keys:
+    if reconciliation_keys and reconciliation_keys != expected_reconciliation_keys:
         raise AnalyticalStoreError(
-            "Reconciliation artifact must contain exactly one row per selected case and phase."
+            "A nonempty reconciliation artifact must contain exactly one row per "
+            "selected case and phase."
         )
     prepared_by_case = {case.case_id: case for case in cases}
     for row in reconciliation_rows:
@@ -1184,16 +1446,6 @@ def prepare_run_import(
                     f"Passing reconciliation exceeds tolerance for {case.case_id}/{phase}."
                 )
 
-    configuration = {
-        "schema_version": 1,
-        "year_selection": str(manifest.get("year_selection", "")),
-        "canonical_prefix": str(discovery.get("canonical_prefix", "")),
-        "requested_states": list(REQUESTED_STATES),
-        "phase_order": list(PHASE_ORDER),
-        "phase_state_map": {phase: list(PHASE_STATE_MAP[phase]) for phase in PHASE_ORDER},
-    }
-    configuration_json = _canonical_json(configuration)
-    configuration_fingerprint = _sha256_bytes(configuration_json.encode("utf-8"))
     content_digest = hashlib.sha256()
     for path in sorted(set(artifact_paths_for_fingerprint), key=lambda item: str(item).casefold()):
         relative = str(path.relative_to(run_root)).replace("\\", "/")
@@ -1206,6 +1458,8 @@ def prepare_run_import(
             content_digest.update(case.case_id.encode("utf-8"))
             content_digest.update(b"\0")
             content_digest.update(case.source_sha256.encode("ascii"))
+            content_digest.update(b"\0")
+            content_digest.update(case.input_fingerprint_sha256.encode("ascii"))
             content_digest.update(b"\0")
     global_validations = [
         {
@@ -1371,6 +1625,66 @@ def _insert_intervals(
     )
 
 
+def _insert_case_cache_metadata(
+    connection: sqlite3.Connection,
+    case_analysis_id: int,
+    case: PreparedCase,
+) -> None:
+    if not case.input_fingerprint_sha256 or not case.case_configuration_fingerprint_sha256:
+        raise AnalyticalStoreError(f"Case {case.case_id} is missing cache fingerprints.")
+    inputs = list(case.analysis_inputs or [])
+    if {str(row.get("input_role", "")) for row in inputs} != {
+        "clinical_database",
+        "timing_log",
+    }:
+        raise AnalyticalStoreError(
+            f"Case {case.case_id} must record clinical_database and timing_log inputs."
+        )
+    connection.execute(
+        """
+        INSERT INTO case_analysis_cache_entries (
+            case_analysis_id, cache_contract_version, input_fingerprint_sha256,
+            case_configuration_fingerprint_sha256, case_result_metadata_json,
+            created_at_utc
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            case_analysis_id,
+            CACHE_CONTRACT_VERSION,
+            case.input_fingerprint_sha256,
+            case.case_configuration_fingerprint_sha256,
+            _validate_raw_json(
+                case.cache_metadata_json,
+                context=f"{case.case_id} cache metadata",
+            ),
+            _utc_now(),
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO case_analysis_inputs (
+            case_analysis_id, input_role, input_ordinal, present, source_type,
+            observed_path, archive_member, size_bytes, mtime_ns, sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                case_analysis_id,
+                str(row["input_role"]),
+                int(row.get("input_ordinal", 0)),
+                int(bool(row["present"])),
+                str(row.get("source_type", "")),
+                str(row.get("observed_path", "")),
+                str(row.get("archive_member", "")),
+                row.get("size_bytes"),
+                row.get("mtime_ns"),
+                row.get("sha256"),
+            )
+            for row in inputs
+        ],
+    )
+
+
 def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
     """Persist one prevalidated run atomically with content-addressed reuse."""
     target = validate_database_path(database, run_dir=Path(prepared.run_dir))
@@ -1494,7 +1808,7 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                     (
                         source_artifact_id,
                         parser_id,
-                        prepared.configuration_fingerprint_sha256,
+                        case.case_configuration_fingerprint_sha256,
                     ),
                 ).fetchone()
                 if row is None:
@@ -1512,7 +1826,7 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                             case_pk,
                             source_artifact_id,
                             parser_id,
-                            prepared.configuration_fingerprint_sha256,
+                            case.case_configuration_fingerprint_sha256,
                             case.start_timestamp_iso,
                             case.end_timestamp_iso,
                             case.start_provenance_json,
@@ -1524,6 +1838,7 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                     case_analysis_id = int(cursor.lastrowid)
                     _insert_events(connection, case_analysis_id, case.events or [])
                     _insert_intervals(connection, case_analysis_id, case.intervals or [])
+                    _insert_case_cache_metadata(connection, case_analysis_id, case)
                     inserted_analyses += 1
                     inserted_events += len(case.events or [])
                     inserted_intervals += len(case.intervals or [])
@@ -1536,6 +1851,24 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                             "Deterministic case-analysis conflict for "
                             f"{prepared.site_code}/{case.case_id}: identical source, parser, "
                             "and configuration produced different artifacts."
+                        )
+                    cache_row = connection.execute(
+                        """
+                        SELECT input_fingerprint_sha256,
+                               case_configuration_fingerprint_sha256
+                        FROM case_analysis_cache_entries
+                        WHERE case_analysis_id = ?
+                        """,
+                        (case_analysis_id,),
+                    ).fetchone()
+                    if cache_row is None or (
+                        cache_row["input_fingerprint_sha256"]
+                        != case.input_fingerprint_sha256
+                        or cache_row["case_configuration_fingerprint_sha256"]
+                        != case.case_configuration_fingerprint_sha256
+                    ):
+                        raise AnalyticalStoreError(
+                            f"Cache metadata conflict for {prepared.site_code}/{case.case_id}."
                         )
                     reused_analyses += 1
                 connection.execute(
@@ -1767,6 +2100,235 @@ def export_wide(database: Path, run_id: str, output: Path) -> dict[str, Any]:
     }
 
 
+LONG_HEADERS = (
+    "run_id",
+    "site",
+    "case_order",
+    "experience",
+    "case_id",
+    "start_timestamp_iso",
+    "end_timestamp_iso",
+    "state",
+    "duration_sec_unrounded",
+    "duration_min_unrounded",
+)
+
+
+def _explicit_external_output(output: Path) -> Path:
+    target = output.expanduser().resolve()
+    if _is_within(target, REPO_ROOT.resolve()):
+        raise AnalyticalStoreError(f"Analytical report output must be outside Git: {target}")
+    return target
+
+
+def _write_rows(output: Path, headers: tuple[str, ...], rows: list[dict[str, Any]]) -> Path:
+    target = _explicit_external_output(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=headers, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(buffer.getvalue(), encoding="utf-8", newline="")
+    temporary.replace(target)
+    return target
+
+
+def _run_long_rows(connection: sqlite3.Connection, run_id: str) -> list[dict[str, Any]]:
+    cases = connection.execute(
+        """
+        SELECT rc.case_order, rc.experience, c.site_code, c.case_id,
+               ca.case_analysis_id, ca.start_timestamp_iso, ca.end_timestamp_iso
+        FROM run_cases rc
+        JOIN cases c ON c.case_pk = rc.case_pk
+        JOIN case_analyses ca ON ca.case_analysis_id = rc.case_analysis_id
+        WHERE rc.run_id = ? AND rc.final_row_included = 1
+        ORDER BY rc.case_order, c.case_id
+        """,
+        (run_id,),
+    ).fetchall()
+    if not cases:
+        present = connection.execute(
+            "SELECT 1 FROM analysis_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if present is None:
+            raise AnalyticalStoreError(f"Run ID is not present in the store: {run_id}")
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        totals = {
+            str(row["state"]): float(row["duration_sec_unrounded"])
+            for row in connection.execute(
+                "SELECT state, duration_sec_unrounded FROM v_case_state_seconds "
+                "WHERE case_analysis_id = ?",
+                (case["case_analysis_id"],),
+            ).fetchall()
+        }
+        for state in REQUESTED_STATES:
+            seconds = totals.get(state, 0.0)
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "site": str(case["site_code"]),
+                    "case_order": int(case["case_order"]),
+                    "experience": str(case["experience"]),
+                    "case_id": str(case["case_id"]),
+                    "start_timestamp_iso": str(case["start_timestamp_iso"]),
+                    "end_timestamp_iso": str(case["end_timestamp_iso"]),
+                    "state": state,
+                    "duration_sec_unrounded": format(seconds, ".17g"),
+                    "duration_min_unrounded": format(seconds / 60.0, ".17g"),
+                }
+            )
+    return rows
+
+
+def export_long(database: Path, run_id: str, output: Path) -> dict[str, Any]:
+    target = validate_database_path(database)
+    connection = _open_database(target, read_only=True)
+    try:
+        _verify_schema(connection)
+        rows = _run_long_rows(connection, run_id)
+    finally:
+        connection.close()
+    output_path = _write_rows(output, LONG_HEADERS, rows)
+    return {"run_id": run_id, "row_count": len(rows), "output": str(output_path)}
+
+
+COMPARE_HEADERS = (
+    "baseline_run_id",
+    "comparison_run_id",
+    "site",
+    "case_id",
+    "state",
+    "baseline_minutes_unrounded",
+    "comparison_minutes_unrounded",
+    "difference_minutes_unrounded",
+    "status",
+)
+
+
+def compare_runs(
+    database: Path,
+    baseline_run_id: str,
+    comparison_run_id: str,
+    output: Path,
+) -> dict[str, Any]:
+    target = validate_database_path(database)
+    connection = _open_database(target, read_only=True)
+    try:
+        _verify_schema(connection)
+        baseline_rows = _run_long_rows(connection, baseline_run_id)
+        comparison_rows = _run_long_rows(connection, comparison_run_id)
+    finally:
+        connection.close()
+    baseline = {
+        (row["site"], row["case_id"], row["state"]): float(row["duration_min_unrounded"])
+        for row in baseline_rows
+    }
+    comparison = {
+        (row["site"], row["case_id"], row["state"]): float(row["duration_min_unrounded"])
+        for row in comparison_rows
+    }
+    rows: list[dict[str, Any]] = []
+    for key in sorted(set(baseline) | set(comparison)):
+        baseline_value = baseline.get(key)
+        comparison_value = comparison.get(key)
+        status = "MATCHED"
+        if baseline_value is None:
+            status = "MISSING_BASELINE"
+        elif comparison_value is None:
+            status = "MISSING_COMPARISON"
+        rows.append(
+            {
+                "baseline_run_id": baseline_run_id,
+                "comparison_run_id": comparison_run_id,
+                "site": key[0],
+                "case_id": key[1],
+                "state": key[2],
+                "baseline_minutes_unrounded": ""
+                if baseline_value is None
+                else format(baseline_value, ".17g"),
+                "comparison_minutes_unrounded": ""
+                if comparison_value is None
+                else format(comparison_value, ".17g"),
+                "difference_minutes_unrounded": ""
+                if baseline_value is None or comparison_value is None
+                else format(comparison_value - baseline_value, ".17g"),
+                "status": status,
+            }
+        )
+    output_path = _write_rows(output, COMPARE_HEADERS, rows)
+    return {
+        "baseline_run_id": baseline_run_id,
+        "comparison_run_id": comparison_run_id,
+        "row_count": len(rows),
+        "output": str(output_path),
+    }
+
+
+SUMMARY_HEADERS = (
+    "run_id",
+    "site",
+    "state",
+    "case_count",
+    "mean_minutes",
+    "median_minutes",
+    "p25_minutes",
+    "p75_minutes",
+    "minimum_minutes",
+    "maximum_minutes",
+)
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def summarize_runs(database: Path, run_ids: list[str], output: Path) -> dict[str, Any]:
+    if not run_ids or len(run_ids) != len(set(run_ids)):
+        raise AnalyticalStoreError("summarize-runs requires unique run IDs.")
+    target = validate_database_path(database)
+    connection = _open_database(target, read_only=True)
+    try:
+        _verify_schema(connection)
+        all_rows = {run_id: _run_long_rows(connection, run_id) for run_id in run_ids}
+    finally:
+        connection.close()
+    rows: list[dict[str, Any]] = []
+    for run_id in run_ids:
+        grouped: dict[tuple[str, str], list[float]] = {}
+        for row in all_rows[run_id]:
+            grouped.setdefault((str(row["site"]), str(row["state"])), []).append(
+                float(row["duration_min_unrounded"])
+            )
+        for (site, state), values in sorted(grouped.items()):
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "site": site,
+                    "state": state,
+                    "case_count": len(values),
+                    "mean_minutes": format(statistics.fmean(values), ".17g"),
+                    "median_minutes": format(statistics.median(values), ".17g"),
+                    "p25_minutes": format(_percentile(values, 0.25), ".17g"),
+                    "p75_minutes": format(_percentile(values, 0.75), ".17g"),
+                    "minimum_minutes": format(min(values), ".17g"),
+                    "maximum_minutes": format(max(values), ".17g"),
+                }
+            )
+    output_path = _write_rows(output, SUMMARY_HEADERS, rows)
+    return {"run_ids": run_ids, "row_count": len(rows), "output": str(output_path)}
+
+
 def list_runs(database: Path) -> list[dict[str, Any]]:
     target = validate_database_path(database)
     if not target.is_file():
@@ -1803,8 +2365,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Initialize, import, inspect, and export the Timeline Analysis SQLite store."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    init_parser = subparsers.add_parser("init", help="Create or verify schema v1.")
+    init_parser = subparsers.add_parser("init", help="Create or verify the latest schema.")
     init_parser.add_argument("--database", required=True, type=Path)
+
+    upgrade_parser = subparsers.add_parser(
+        "upgrade", help="Copy-up a version-1 store to the latest schema."
+    )
+    upgrade_parser.add_argument("--database", required=True, type=Path)
+    upgrade_parser.add_argument("--confirm-onedrive-stopped", action="store_true")
+    upgrade_parser.add_argument("--cleanup-backup", action="store_true")
+    upgrade_parser.add_argument("--require-pinned", action="store_true")
+    upgrade_parser.add_argument("--report-json", type=Path)
 
     import_parser = subparsers.add_parser("import-run", help="Validate and import one published run.")
     import_parser.add_argument("--database", required=True, type=Path)
@@ -1815,6 +2386,28 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--database", required=True, type=Path)
     export_parser.add_argument("--run-id", required=True)
     export_parser.add_argument("--output", required=True, type=Path)
+
+    long_parser = subparsers.add_parser(
+        "export-long", help="Export unrounded run/case/state rows from SQL."
+    )
+    long_parser.add_argument("--database", required=True, type=Path)
+    long_parser.add_argument("--run-id", required=True)
+    long_parser.add_argument("--output", required=True, type=Path)
+
+    compare_parser = subparsers.add_parser(
+        "compare-runs", help="Export case/state differences between two runs."
+    )
+    compare_parser.add_argument("--database", required=True, type=Path)
+    compare_parser.add_argument("--baseline-run-id", required=True)
+    compare_parser.add_argument("--comparison-run-id", required=True)
+    compare_parser.add_argument("--output", required=True, type=Path)
+
+    summary_parser = subparsers.add_parser(
+        "summarize-runs", help="Export per-run/site/state descriptive statistics."
+    )
+    summary_parser.add_argument("--database", required=True, type=Path)
+    summary_parser.add_argument("--run-id", action="append", required=True)
+    summary_parser.add_argument("--output", required=True, type=Path)
 
     list_parser = subparsers.add_parser("list-runs", help="List imported historical runs.")
     list_parser.add_argument("--database", required=True, type=Path)
@@ -1829,11 +2422,32 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "init":
             path = initialize_database(args.database)
             payload = {"status": "READY", "schema_version": SCHEMA_VERSION, "database": str(path)}
+        elif args.command == "upgrade":
+            from .store_upgrade import upgrade_database_copy
+
+            payload = upgrade_database_copy(
+                args.database,
+                confirm_onedrive_stopped=args.confirm_onedrive_stopped,
+                cleanup_backup=args.cleanup_backup,
+                require_pinned=args.require_pinned,
+            )
+            _write_optional_json(payload, args.report_json)
         elif args.command == "import-run":
             payload = import_run(args.database, args.run_dir).to_dict()
             _write_optional_json(payload, args.report_json)
         elif args.command == "export-wide":
             payload = export_wide(args.database, args.run_id, args.output)
+        elif args.command == "export-long":
+            payload = export_long(args.database, args.run_id, args.output)
+        elif args.command == "compare-runs":
+            payload = compare_runs(
+                args.database,
+                args.baseline_run_id,
+                args.comparison_run_id,
+                args.output,
+            )
+        elif args.command == "summarize-runs":
+            payload = summarize_runs(args.database, args.run_id, args.output)
         elif args.command == "list-runs":
             payload = {"database": str(args.database.expanduser().resolve()), "runs": list_runs(args.database)}
             _write_optional_json(payload, args.report_json)

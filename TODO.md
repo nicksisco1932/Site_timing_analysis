@@ -2,11 +2,11 @@
 
 ## Current checkpoint
 
-- The reviewed OneDrive-store relocation is published on
-  `feature/workflow-analytics` at `4b7d8cc` (2026-08-11).
+- Cache/reporting work is on `codex/timeline-cache-reuse`, based on the reviewed
+  documentation checkpoint `36b4067` (2026-08-11).
 - The sole operational analytical store is the locally pinned
   `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite`.
-- Detailed evidence for completed TODOs #1 through #5 is archived in
+- Detailed evidence for completed TODOs #1 through #6 is archived in
   [`docs/TODO_HISTORY.md`](docs/TODO_HISTORY.md).
 - Clinical databases, analytical stores, acquired data, generated outputs, and
   profiling artifacts remain outside Git.
@@ -20,51 +20,7 @@
 | #3 Five-case acquisition | Completed 2026-08-11 | Five explicit cases acquired with no unresolved ambiguity or validation failure. |
 | #4 Bulk acquisition | Completed 2026-08-11 | Resumable explicit-selection acquisition with separate backend and safe existing-file handling. |
 | #5 Site availability and parity | Completed 2026-08-11 | Read-only remote/local inventory and case-parity CLI delivered and validated. |
-
-## 6. Complete the durable analytical database — In progress
-
-**Rationale:** Parsing every source database for every report is slow and makes
-historical comparison harder. The analytical store should support exact reuse
-without weakening source identity, provenance, validation, or publication
-gates.
-
-Phase 1 is complete:
-
-- Schema version 1 stores source/parser/configuration history, canonical
-  events, unrounded detailed intervals, run cases, wide snapshots,
-  reconciliation, and validation results.
-- Explicit `init`, `import-run`, `export-wide`, and `list-runs` commands are
-  available; paths inside Git or an imported run are rejected.
-- The canonical OneDrive store passed integrity and foreign-key checks with 1
-  run, 9 run cases, 9 analyses, 1,226 events, 1,226 intervals, and 45
-  reconciliation rows. Its SQL export matches the nine-case ASUI deliverable.
-- Relocation uses `DELETE` journaling, deterministic logical parity, staged
-  publication, locally pinned files, and a single-writer workstation rule.
-
-Next phase:
-
-- Add a validated schema-v2 copy-up migration that records every
-  analysis-affecting input, including an explicit absent timing-log dependency.
-- Add opt-in, read-only cache lookup to the validated Timeline Analysis runner.
-  The exact key must include source, timing-log, parser, configuration, and
-  cache-contract fingerprints; size and modification time are hints only.
-- Materialize cache hits through the standard artifact writers, run the normal
-  validation/reconciliation/publication gates, and report hit/miss/invalid
-  outcomes under `Backend/reports`.
-- Keep store import a separate explicit command; do not add a hidden database
-  default or automatic OneDrive write.
-- Add deterministic SQL-backed long export, run comparison, and run/site
-  summary commands using detailed intervals as the source of truth.
-
-Completion criteria:
-
-- Schema migration, cache keys, materialization, corruption fallback, and all
-  invalidation dimensions pass tests using temporary databases.
-- Uncached and all-hit reruns of the same nine ASUI and five explicit UCLA
-  cases produce identical public CSVs and matching validated event/interval
-  artifacts without modifying source data.
-- SQL reports reconcile to their source runs, and the canonical store remains
-  pinned, sidecar-free after close, and valid after OneDrive resumes.
+| #6 Durable analytical database | Completed 2026-08-11 | Schema-v2 exact read-only cache reuse and SQL-native reporting passed ASUI/UCLA live parity. |
 
 ## 7. Profile and optimize the pipeline
 
@@ -73,27 +29,41 @@ follow cache integration so measurements reflect the intended architecture.
 
 Current evidence:
 
-- The representative four-case profiler reconciles more than `99.99%` of wall
-  time and distinguishes CPU, database, and filesystem work.
-- A plot-disabled diagnostic reduced measured runtime by `10.81%` with an
-  identical final CSV.
+- Three repetitions per condition on the fixed UCLA manifest `008_01-201`,
+  `008_01-202`, `008_01-206`, and `008_01-207` reconciled at least `99.9989%`
+  of total wall time and produced the same public CSV hash.
+- Median total wall time was `65.601s` with cache disabled, `83.110s` with two
+  hits/two misses (`+26.69%`), and `126.644s` with four hits (`+93.05%`).
+- The mandatory repository-test preflight dominated and varied substantially:
+  median `60.220s`, `76.204s`, and `117.256s`, respectively. On this small,
+  local dataset, all-hit source hashing/store lookup (`0.336s`) also exceeded
+  the disabled ingestion/transformation proxy (`0.203s`). Cache reuse is exact
+  and useful for deterministic reconstruction, but is not yet a speedup here.
+- A prior plot-disabled diagnostic reduced runtime by `10.81%`, but plots and
+  intermediate CSVs remain part of the artifact contract.
 - Intermediate diagnostic CSV suppression remains unsupported because those
   artifacts are part of the current staged contract.
 
-Next phase:
+Selected optimization:
 
-- Run three repeated benchmarks on one fixed representative manifest with
-  cache disabled, all cases cached, and a controlled hit/miss mixture.
-- Report median wall time, CPU time, database/filesystem attribution, stage and
-  case percentages, output parity, and percentage change.
-- Select an optimization only after the measurements identify a bottleneck;
-  preserve case selection, source handling, detailed interval truth,
-  publication gates, and public output contracts.
+- Design an explicit, reusable pre-execution baseline snapshot so repeated
+  operational runs do not rerun the full repository test suite when the Git
+  commit/dirty fingerprint, interpreter, dependency state, test command, exit
+  status, and freshness window still match.
+- Keep live baseline execution as the default until snapshot validation is
+  proven. Reject or refresh stale/mismatched snapshots; never silently skip a
+  required gate.
+- Rebenchmark the same fixed manifest after the preflight change. Treat source
+  hashing or plot optimization as later work unless post-preflight measurements
+  identify either as the next bottleneck.
 
 Completion criteria:
 
 - Every benchmark reconciles nested timing to total wall time within tolerance.
-- The chosen optimization has repeatable before/after evidence and exact public
-  output parity.
+- A verified snapshot is accepted only for an identical repository,
+  interpreter, dependency, and test-command fingerprint and retains the full
+  baseline evidence in `Backend/reports`.
+- Three repeated before/after runs show a repeatable total-wall reduction with
+  byte-identical public CSV, event, interval, plot, and reconciliation outputs.
 - Generated profiling outputs remain outside Git and the recommendation clearly
   distinguishes CPU, database, and filesystem constraints.

@@ -43,6 +43,7 @@ from .plotting import generate_timeline_plots
 from .profiling import PerformanceProfiler
 from .state_machine import assign_states
 from .timing import compute_state_intervals
+from .timeline_cache import TimelineCacheReader
 from .timing_log import find_timing_log, parse_timing_log_csv
 from .tff_adapter import apply_read_only_tff_adapter
 
@@ -280,6 +281,7 @@ def run_first_slice(
     argv: list[str] | None = None,
     *,
     performance_profiler: PerformanceProfiler | None = None,
+    cache_reader: TimelineCacheReader | None = None,
 ) -> RunManifest:
     with _profile_stage(performance_profiler, "global setup and teardown"):
         started_at = datetime.now(timezone.utc)
@@ -348,6 +350,139 @@ def run_first_slice(
                     db_candidate_index=config.db_candidate_index,
                     zip_member_index=config.zip_member_index,
                 )
+
+            timing_log_path = find_timing_log(
+                case_record.case_id,
+                resolved_site_root=site_root,
+                timing_log_dir_override=config.timing_log_dir,
+            )
+            cache_lookup = None
+            if cache_reader is not None:
+                with _profile_stage(
+                    performance_profiler,
+                    "cache lookup",
+                    case_id=case_record.case_id,
+                ):
+                    cache_lookup = cache_reader.lookup(
+                        case_id=case_record.case_id,
+                        source=source,
+                        timing_log_path=timing_log_path,
+                    )
+            if cache_lookup is not None and cache_lookup.status == "HIT":
+                cached = cache_lookup.artifacts
+                if cached is None:
+                    raise RuntimeError("Cache hit did not return materialized artifacts.")
+                with _profile_stage(
+                    performance_profiler,
+                    "cache materialization",
+                    case_id=case_record.case_id,
+                ):
+                    with _profile_artifact_write(
+                        performance_profiler,
+                        subtype="CSV export",
+                        case_id=case_record.case_id,
+                    ):
+                        normalized_export_path = write_normalized_events_csv(
+                            case_id=case_record.case_id,
+                            normalized_events=cached.normalized_events,
+                            output_dir=config.output_dir,
+                        )
+                        enriched_export_path = write_enriched_events_csv(
+                            case_id=case_record.case_id,
+                            enriched_events=cached.enriched_events,
+                            output_dir=config.output_dir,
+                        )
+                        state_labeled_export_path = write_state_labeled_events_csv(
+                            case_id=case_record.case_id,
+                            state_labeled_events=cached.state_labeled_events,
+                            output_dir=config.output_dir,
+                        )
+                        state_interval_export_path = write_state_intervals_csv(
+                            case_id=case_record.case_id,
+                            state_intervals=cached.state_intervals,
+                            output_dir=config.output_dir,
+                        )
+                metadata = cached.metadata
+                case_warnings = list(
+                    dict.fromkeys(
+                        [
+                            *source.warnings,
+                            *list(metadata.get("enrichment_warnings", [])),
+                        ]
+                    )
+                )
+                processed += 1
+                case_results.append(
+                    {
+                        "case_id": case_record.case_id,
+                        "status": "processed",
+                        "source_type": source.source_type,
+                        "source_path": str(source.source_path),
+                        "raw_event_count": int(
+                            metadata.get("raw_event_count", len(cached.normalized_events))
+                        ),
+                        "normalized_event_count": len(cached.normalized_events),
+                        "dropped_event_count": int(metadata.get("dropped_event_count", 0)),
+                        "normalized_export": str(normalized_export_path),
+                        "timing_log_path": str(timing_log_path)
+                        if timing_log_path is not None
+                        else None,
+                        "timing_log_entry_count": int(
+                            metadata.get("timing_log_entry_count", 0)
+                        ),
+                        "session_synthetic_count": int(
+                            metadata.get("session_synthetic_count", 0)
+                        ),
+                        "timing_log_synthetic_count": int(
+                            metadata.get("timing_log_synthetic_count", 0)
+                        ),
+                        "enriched_event_count": len(cached.enriched_events),
+                        "enriched_export": str(enriched_export_path),
+                        "state_labeled_event_count": len(cached.state_labeled_events),
+                        "state_labeled_export": str(state_labeled_export_path),
+                        "state_assignment_warning_count": int(
+                            metadata.get("state_assignment_warning_count", 0)
+                        ),
+                        "state_warnings": list(metadata.get("state_warnings", [])),
+                        "state_interval_count": len(cached.state_intervals),
+                        "state_interval_export": str(state_interval_export_path),
+                        "timing_warning_count": int(
+                            metadata.get("timing_warning_count", 0)
+                        ),
+                        "timing_warnings": list(metadata.get("timing_warnings", [])),
+                        "plot_warning_count": 0,
+                        "plot_warnings": [],
+                        "enrichment_warnings": case_warnings,
+                        "cache_status": "HIT",
+                        "cache_reason": cache_lookup.reason,
+                        "cache_case_analysis_id": cached.case_analysis_id,
+                    }
+                )
+                intervals_for_plot.extend(cached.state_intervals)
+                processed_case_result_indexes.append(len(case_results) - 1)
+                warnings.extend(case_warnings)
+                if performance_profiler is not None:
+                    performance_profiler.set_case_metrics(
+                        case_record.case_id,
+                        database_rows_read=0,
+                        normalized_events=len(cached.normalized_events),
+                        labeled_events=len(cached.state_labeled_events),
+                        intervals=len(cached.state_intervals),
+                    )
+                    performance_profiler.add_case_warnings(
+                        case_record.case_id, case_warnings
+                    )
+                    performance_profiler.record_output_paths(
+                        case_record.case_id,
+                        [
+                            normalized_export_path,
+                            enriched_export_path,
+                            state_labeled_export_path,
+                            state_interval_export_path,
+                        ],
+                    )
+                case_profile_timer.__exit__(None, None, None)
+                continue
 
             with _profile_stage(
                 performance_profiler,
@@ -433,11 +568,6 @@ def run_first_slice(
                 timing_parse_warnings: list[str] = []
                 timing_log_synthetic_events = []
                 timing_mapping_warnings: list[str] = []
-                timing_log_path = find_timing_log(
-                    case_record.case_id,
-                    resolved_site_root=site_root,
-                    timing_log_dir_override=config.timing_log_dir,
-                )
                 if timing_log_path is not None:
                     timing_entries, timing_parse_warnings = parse_timing_log_csv(
                         timing_log_path,
@@ -501,6 +631,11 @@ def run_first_slice(
 
             case_warnings = [
                 *source.warnings,
+                *(
+                    [cache_lookup.reason]
+                    if cache_lookup is not None and cache_lookup.status == "INVALID"
+                    else []
+                ),
                 *session_warnings,
                 *timing_parse_warnings,
                 *timing_mapping_warnings,
@@ -536,6 +671,8 @@ def run_first_slice(
                     "plot_warning_count": 0,
                     "plot_warnings": [],
                     "enrichment_warnings": case_warnings,
+                    "cache_status": cache_lookup.status if cache_lookup is not None else "OFF",
+                    "cache_reason": cache_lookup.reason if cache_lookup is not None else "",
                 }
             )
             intervals_for_plot.extend(state_intervals)

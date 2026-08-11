@@ -171,6 +171,23 @@ $wideExport = "C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_D
 .\.venv\Scripts\python.exe scripts\timeline_store.py list-runs `
   --database $database
 
+.\.venv\Scripts\python.exe scripts\timeline_store.py export-long `
+  --database $database `
+  --run-id "<run-id>" `
+  --output "C:\path\outside\Git\timeline_long.csv"
+
+.\.venv\Scripts\python.exe scripts\timeline_store.py compare-runs `
+  --database $database `
+  --baseline-run-id "<baseline-run-id>" `
+  --comparison-run-id "<comparison-run-id>" `
+  --output "C:\path\outside\Git\run_comparison.csv"
+
+.\.venv\Scripts\python.exe scripts\timeline_store.py summarize-runs `
+  --database $database `
+  --run-id "<run-id-1>" `
+  --run-id "<run-id-2>" `
+  --output "C:\path\outside\Git\run_summary.csv"
+
 .\.venv\Scripts\python.exe scripts\relocate_timeline_store.py verify `
   --database $database `
   --output $wideExport `
@@ -184,6 +201,40 @@ artifact set before opening a write transaction, hashes source databases using
 read-only file access, preserves failed cases from partial runs, and rejects a
 reused run ID whose content changed. Reimporting identical content is a no-op.
 
+Schema v2 records exact clinical-source and timing-log dependencies, including
+an explicit absent timing-log marker, with parser, configuration, and cache-
+contract fingerprints. Upgrade an existing schema-v1 store only while OneDrive
+is stopped and every SQLite connection is closed:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\timeline_store.py upgrade `
+  --database $database `
+  --confirm-onedrive-stopped `
+  --cleanup-backup `
+  --require-pinned
+```
+
+The validated runner can use the store as an explicit read-only exact cache:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_timeline_analysis.py `
+  --site "UCLA_008" `
+  --site-root "C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - UCLA_008" `
+  --canonical-prefix "008_" `
+  --database $database `
+  --cache-mode read-only `
+  --run-dir ".\outputs\timing_gantt\<new-run-directory>"
+```
+
+Cache mode defaults to `off`, and `read-only` requires `--database`; there is no
+hidden OneDrive path or automatic store write. Source candidate resolution,
+validation, and SHA-256 hashing occur before lookup. Exact hits recreate all
+standard artifacts and continue through the normal identity, interval,
+reconciliation, plotting, and publication gates. A corrupt case entry is
+reported as `cache_entry_invalid` and parsed normally; a corrupt store aborts
+cache-enabled execution. Seed new entries only with the separate explicit
+`import-run` command. Schema-v1 analyses remain historical but cache-ineligible.
+
 Detailed state intervals are the analytical source of truth. Full ISO endpoint
 datetimes and their provenance remain queryable; `export-wide` applies only the
 public boundary formatting: clock-only `h:mm:ss AM/PM` endpoints and one-decimal
@@ -195,9 +246,10 @@ The path above is the sole operational store. Writable connections use SQLite
 immediate write transaction. This workstation is the only writer; synchronized
 copies on other computers must remain closed or read-only. Keep the database
 available locally through OneDrive's **Always keep on this device** setting.
-OneDrive synchronization must be stopped during any future store relocation;
-use `scripts/relocate_timeline_store.py migrate --help` for the explicit,
-non-overwriting migration interface.
+OneDrive synchronization must be stopped during any future store relocation or
+schema copy-up; use `scripts/relocate_timeline_store.py migrate --help` or
+`scripts/timeline_store.py upgrade --help` for the explicit, non-overwriting
+interfaces.
 
 ### Read-Only Site Availability and Case Parity
 
@@ -536,6 +588,10 @@ For quick CLI smoke checks:
 .\.venv\Scripts\python.exe scripts\run_timeline_analysis.py --help
 .\.venv\Scripts\python.exe scripts\build_timing_gantt_deliverables.py --help
 .\.venv\Scripts\python.exe scripts\timeline_store.py --help
+.\.venv\Scripts\python.exe scripts\timeline_store.py upgrade --help
+.\.venv\Scripts\python.exe scripts\timeline_store.py export-long --help
+.\.venv\Scripts\python.exe scripts\timeline_store.py compare-runs --help
+.\.venv\Scripts\python.exe scripts\timeline_store.py summarize-runs --help
 .\.venv\Scripts\python.exe scripts\relocate_timeline_store.py --help
 ```
 
