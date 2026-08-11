@@ -293,6 +293,7 @@ def _validate_database_case_identity(
     tables: set[str],
     columns_by_table: dict[str, set[str]],
     expected_case_id: str,
+    expected_session_folder: str | None = None,
 ) -> dict[str, Any]:
     """Compare nonempty database case identifiers without reporting raw values.
 
@@ -318,9 +319,61 @@ def _validate_database_case_identity(
                 normalized_values.add(normalized)
 
     expected_normalized = _normalized_case_identity(expected_case_id)
-    if not normalized_values:
+    identity_method = "patient_id"
+    session_start_rows = 0
+    parseable_session_start_rows = 0
+    matching_session_start_rows = 0
+    if not normalized_values and expected_session_folder:
+        folder_token = _timestamp_token(expected_session_folder)
+        if (
+            folder_token
+            and "Sessions" in tables
+            and "Start" in columns_by_table.get("Sessions", set())
+        ):
+            checked_fields.append("Sessions.Start")
+            folder_start = datetime.strptime(folder_token, "%Y-%m-%d--%H-%M-%S")
+            for row in connection.execute(
+                "SELECT Start FROM Sessions "
+                "WHERE Start IS NOT NULL AND TRIM(CAST(Start AS TEXT)) <> ''"
+            ):
+                session_start_rows += 1
+                raw_start = str(row[0]).strip()
+                try:
+                    parsed = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                parseable_session_start_rows += 1
+                if abs((parsed.replace(tzinfo=None) - folder_start).total_seconds()) <= 2.0:
+                    matching_session_start_rows += 1
+            if session_start_rows == 1 and matching_session_start_rows == 1:
+                status = "PASS"
+                reason = (
+                    "PatientId is unavailable; the sole Sessions.Start matches "
+                    "the exact selected session-folder timestamp within 2 seconds."
+                )
+                identity_method = "exact_case_folder_and_session_start"
+            elif parseable_session_start_rows:
+                status = "FAIL"
+                reason = (
+                    "PatientId is unavailable and Sessions.Start does not "
+                    "unambiguously match the selected session-folder timestamp."
+                )
+                identity_method = "session_start_mismatch"
+            else:
+                status = "NOT_AVAILABLE"
+                reason = (
+                    "No nonempty PatientId or parseable Sessions.Start identity "
+                    "value is available in the checked tables."
+                )
+                identity_method = "not_available"
+        else:
+            status = "NOT_AVAILABLE"
+            reason = "No nonempty PatientId value is available in the checked tables."
+            identity_method = "not_available"
+    elif not normalized_values:
         status = "NOT_AVAILABLE"
         reason = "No nonempty PatientId value is available in the checked tables."
+        identity_method = "not_available"
     elif len(normalized_values) != 1:
         status = "FAIL"
         reason = "Database PatientId fields contain multiple normalized identities."
@@ -334,11 +387,16 @@ def _validate_database_case_identity(
     return {
         "status": status,
         "reason": reason,
+        "identity_method": identity_method,
         "comparison_rule": "case-insensitive exact match after separator normalization",
         "expected_case_id": expected_case_id,
         "fields_checked": checked_fields,
         "nonempty_rows": nonempty_rows,
         "distinct_normalized_values": len(normalized_values),
+        "session_start_rows": session_start_rows,
+        "parseable_session_start_rows": parseable_session_start_rows,
+        "matching_session_start_rows": matching_session_start_rows,
+        "session_start_tolerance_seconds": 2.0,
     }
 
 
@@ -346,6 +404,7 @@ def validate_downloaded_database(
     path: Path,
     *,
     expected_case_id: str | None = None,
+    expected_session_folder: str | None = None,
     require_case_identity: bool = False,
 ) -> dict[str, Any]:
     """Validate a downloaded database read-only and return identity/schema facts."""
@@ -441,6 +500,7 @@ def validate_downloaded_database(
                 set(tables),
                 columns_by_table,
                 expected_case_id,
+                expected_session_folder,
             )
     except sqlite3.Error as exc:
         validation["error"] = f"database_validation_failed:{exc}"
@@ -529,6 +589,201 @@ def _extract_single_local_db(archive_path: Path, target_path: Path) -> tuple[str
         return member.filename, actual_size
 
 
+def _resume_existing_database(
+    *,
+    final_path: Path,
+    site: str,
+    case_id: str,
+    started_at_utc: str,
+    context: dict[str, Any],
+    inventory: dict[str, Any] | None,
+    require_case_identity: bool,
+) -> AcquisitionResult:
+    """Verify an existing destination against inventory and current remote facts.
+
+    This path never overwrites or moves the existing file. It is successful only
+    when the database itself passes the normal read-only gates and every stable
+    local/remote identity field agrees with a prior successful inventory entry.
+    """
+    resolved_path = final_path.resolve()
+    if not final_path.is_file():
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_not_file",
+            reason=f"Existing destination is not a regular file: {resolved_path}",
+            site=site,
+            case_id=case_id,
+            started_at_utc=started_at_utc,
+            warnings=[str(resolved_path)],
+            **context,
+        )
+
+    validation = validate_downloaded_database(
+        final_path,
+        expected_case_id=case_id,
+        expected_session_folder=str(context.get("remote_session_folder") or ""),
+        require_case_identity=require_case_identity,
+    )
+    size_bytes = final_path.stat().st_size
+    digest = _sha256(final_path)
+    if validation["status"] != "PASS":
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_invalid",
+            reason=str(validation.get("error") or "Existing SQLite validation failed."),
+            site=site,
+            case_id=case_id,
+            started_at_utc=started_at_utc,
+            saved_path=str(resolved_path),
+            size_bytes=size_bytes,
+            sha256=digest,
+            database_validation=validation,
+            **context,
+        )
+    if not isinstance(inventory, dict):
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_without_inventory",
+            reason=(
+                "An existing valid database has no prior successful inventory "
+                "entry; refusing to assume it matches the current remote source."
+            ),
+            site=site,
+            case_id=case_id,
+            started_at_utc=started_at_utc,
+            saved_path=str(resolved_path),
+            size_bytes=size_bytes,
+            sha256=digest,
+            database_validation=validation,
+            **context,
+        )
+
+    resume_context = dict(context)
+    if resume_context["remote_archive_name"]:
+        # The current archive member name cannot be known without downloading
+        # the unchanged archive again. Preserve the previously validated member
+        # identity while requiring the archive's remote size/usertime to match.
+        resume_context["remote_database_name"] = inventory.get(
+            "remote_database_name", ""
+        )
+    expected_values: dict[str, Any] = {
+        "site": site,
+        "case_id": case_id,
+        "saved_path": str(resolved_path),
+        "size_bytes": size_bytes,
+        "sha256": digest,
+        "remote_container": resume_context["remote_container"],
+        "remote_case_folder": resume_context["remote_case_folder"],
+        "remote_session_folder": resume_context["remote_session_folder"],
+        "remote_archive_name": resume_context["remote_archive_name"],
+        "remote_database_name": resume_context["remote_database_name"],
+        "remote_artifact_size_bytes": resume_context["remote_artifact_size_bytes"],
+        "remote_artifact_usertime": resume_context["remote_artifact_usertime"],
+    }
+    mismatches: list[str] = []
+    for field_name, expected in expected_values.items():
+        actual = inventory.get(field_name)
+        if field_name in {"saved_path", "sha256"}:
+            matches = str(actual or "").casefold() == str(expected).casefold()
+        else:
+            matches = actual == expected
+        if not matches:
+            mismatches.append(field_name)
+    if mismatches:
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_inventory_or_source_mismatch",
+            reason=(
+                "Existing database, prior inventory, and current remote metadata "
+                "do not agree; refusing to overwrite or silently reuse it."
+            ),
+            site=site,
+            case_id=case_id,
+            started_at_utc=started_at_utc,
+            saved_path=str(resolved_path),
+            size_bytes=size_bytes,
+            sha256=digest,
+            database_validation=validation,
+            warnings=[f"mismatched_field:{name}" for name in sorted(mismatches)],
+            **resume_context,
+        )
+
+    return _result(
+        status="success",
+        reason_code="already_present_valid",
+        reason=(
+            "Existing local.db passed validation and matched prior inventory plus "
+            "current remote metadata; download was skipped."
+        ),
+        site=site,
+        case_id=case_id,
+        started_at_utc=started_at_utc,
+        saved_path=str(resolved_path),
+        size_bytes=size_bytes,
+        sha256=digest,
+        database_validation=validation,
+        **resume_context,
+    )
+
+
+def _skip_existing_database_with_awareness(
+    *,
+    final_path: Path,
+    site: str,
+    case_id: str,
+    started_at_utc: str,
+) -> AcquisitionResult:
+    """Validate and report an existing file without asserting remote equivalence."""
+    resolved_path = final_path.resolve()
+    if not final_path.is_file():
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_not_file",
+            reason=f"Existing destination is not a regular file: {resolved_path}",
+            site=site,
+            case_id=case_id,
+            started_at_utc=started_at_utc,
+            warnings=[str(resolved_path)],
+        )
+    validation = validate_downloaded_database(
+        final_path,
+        expected_case_id=case_id,
+        require_case_identity=False,
+    )
+    size_bytes = final_path.stat().st_size
+    digest = _sha256(final_path)
+    if validation["status"] != "PASS":
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_invalid",
+            reason=str(validation.get("error") or "Existing SQLite validation failed."),
+            site=site,
+            case_id=case_id,
+            started_at_utc=started_at_utc,
+            saved_path=str(resolved_path),
+            size_bytes=size_bytes,
+            sha256=digest,
+            database_validation=validation,
+        )
+    return _result(
+        status="success",
+        reason_code="existing_detected_and_skipped",
+        reason=(
+            "Existing local.db was detected, passed local read-only validation, "
+            "and was skipped without download or overwrite. Remote content "
+            "equivalence was not asserted."
+        ),
+        site=site,
+        case_id=case_id,
+        started_at_utc=started_at_utc,
+        saved_path=str(resolved_path),
+        size_bytes=size_bytes,
+        sha256=digest,
+        database_validation=validation,
+        warnings=["remote_content_not_compared"],
+    )
+
+
 def acquire_single_case(
     *,
     link: Any,
@@ -538,6 +793,11 @@ def acquire_single_case(
     session_key: Callable[[str], str | None],
     allow_session_zip_fallback: bool = False,
     require_case_identity: bool = False,
+    allow_existing_valid_resume: bool = False,
+    existing_inventory: dict[str, Any] | None = None,
+    verify_and_adopt_existing: bool = False,
+    technical_root: Path | None = None,
+    skip_existing_with_awareness: bool = False,
 ) -> AcquisitionResult:
     """Acquire one ``local.db`` from one exact case and timestamped session.
 
@@ -545,16 +805,37 @@ def acquire_single_case(
     source mutation method is called. Domain failures return explicit result
     records so the CLI can always write a diagnostic report. Session-export ZIP
     fallback is opt-in and is considered only when no direct database exists.
+    Existing-destination reuse is also opt-in and requires a matching prior
+    inventory record plus unchanged current remote metadata. An additional
+    opt-in adoption path can establish the first inventory record by validating
+    the existing file, downloading and validating the current remote artifact,
+    and requiring exact size and SHA-256 equality. Neither path overwrites the
+    existing destination.
     """
     started = _utc_now()
     _validate_explicit_selection(site, case_id)
     destination = destination.expanduser().resolve()
+    technical_root = (technical_root or destination).expanduser().resolve()
     final_path = destination / case_id / "local.db"
-    staging_path = destination / "_staging" / case_id / "local.db"
-    staging_archive_path = destination / "_staging" / case_id / "session-export.zip"
-    quarantine_root = destination / "_quarantine" / case_id
+    staging_path = technical_root / "_staging" / case_id / "local.db"
+    staging_archive_path = technical_root / "_staging" / case_id / "session-export.zip"
+    quarantine_root = technical_root / "_quarantine" / case_id
 
-    if final_path.exists():
+    if (
+        final_path.exists()
+        and skip_existing_with_awareness
+        and not isinstance(existing_inventory, dict)
+        and not verify_and_adopt_existing
+    ):
+        return _skip_existing_database_with_awareness(
+            final_path=final_path,
+            site=site,
+            case_id=case_id,
+            started_at_utc=started,
+        )
+    if final_path.exists() and not (
+        allow_existing_valid_resume or verify_and_adopt_existing
+    ):
         return _result(
             status="quarantined",
             reason_code="destination_already_exists",
@@ -846,6 +1127,39 @@ def acquire_single_case(
         ),
     }
 
+    adoption_validation: dict[str, Any] | None = None
+    if (
+        final_path.exists()
+        and verify_and_adopt_existing
+        and not isinstance(existing_inventory, dict)
+    ):
+        adoption_validation = validate_downloaded_database(
+            final_path,
+            expected_case_id=case_id,
+            expected_session_folder=session_folder.name,
+            require_case_identity=require_case_identity,
+        )
+        if adoption_validation["status"] != "PASS":
+            return _resume_existing_database(
+                final_path=final_path,
+                site=site,
+                case_id=case_id,
+                started_at_utc=started,
+                context=context,
+                inventory=None,
+                require_case_identity=require_case_identity,
+            )
+    elif final_path.exists():
+        return _resume_existing_database(
+            final_path=final_path,
+            site=site,
+            case_id=case_id,
+            started_at_utc=started,
+            context=context,
+            inventory=existing_inventory,
+            require_case_identity=require_case_identity,
+        )
+
     staging_path.parent.mkdir(parents=True, exist_ok=True)
     if database_item is not None:
         try:
@@ -853,7 +1167,13 @@ def acquire_single_case(
         except Exception as exc:  # noqa: BLE001 - external transport boundary
             partial = Path(str(staging_path) + ".part")
             quarantine_path = ""
-            artifact = staging_path if staging_path.exists() else partial if partial.exists() else None
+            artifact = (
+                staging_path
+                if staging_path.exists()
+                else partial
+                if partial.exists()
+                else None
+            )
             if artifact is not None:
                 quarantine_path = str(_move_to_quarantine(artifact, quarantine_root))
             return _result(
@@ -969,6 +1289,7 @@ def acquire_single_case(
     validation = validate_downloaded_database(
         staging_path,
         expected_case_id=case_id,
+        expected_session_folder=session_folder.name,
         require_case_identity=require_case_identity,
     )
     digest = _sha256(staging_path)
@@ -993,6 +1314,91 @@ def acquire_single_case(
         )
 
     final_path.parent.mkdir(parents=True, exist_ok=True)
+    if final_path.exists() and adoption_validation is not None:
+        existing_size = final_path.stat().st_size
+        existing_digest = _sha256(final_path)
+        if existing_size == actual_size and existing_digest.casefold() == digest.casefold():
+            try:
+                staging_path.unlink()
+                if staging_archive_path.exists():
+                    staging_archive_path.unlink()
+            except OSError as exc:
+                quarantined_paths: list[str] = []
+                if staging_path.exists():
+                    quarantined_paths.append(
+                        str(_move_to_quarantine(staging_path, quarantine_root))
+                    )
+                if staging_archive_path.exists():
+                    quarantined_paths.append(
+                        str(_move_to_quarantine(staging_archive_path, quarantine_root))
+                    )
+                return _result(
+                    status="failed",
+                    reason_code="verified_adoption_cleanup_failed",
+                    reason=(
+                        "Existing and remote databases matched exactly, but the "
+                        f"temporary verified download could not be removed: {exc}"
+                    ),
+                    site=site,
+                    case_id=case_id,
+                    started_at_utc=started,
+                    saved_path=str(final_path.resolve()),
+                    quarantine_path=quarantined_paths[0] if quarantined_paths else "",
+                    size_bytes=existing_size,
+                    sha256=existing_digest,
+                    database_validation=adoption_validation,
+                    warnings=quarantined_paths[1:],
+                    **context,
+                )
+            return _result(
+                status="success",
+                reason_code="existing_verified_and_adopted",
+                reason=(
+                    "Existing local.db passed validation and exactly matched a "
+                    "freshly downloaded, validated remote artifact; it was adopted "
+                    "into the acquisition inventory without overwrite."
+                ),
+                site=site,
+                case_id=case_id,
+                started_at_utc=started,
+                saved_path=str(final_path.resolve()),
+                size_bytes=existing_size,
+                sha256=existing_digest,
+                database_validation=adoption_validation,
+                warnings=sorted(ignored_case_files, key=str.casefold),
+                **context,
+            )
+
+        quarantined_database = _move_to_quarantine(staging_path, quarantine_root)
+        warnings = [
+            "existing_destination_preserved",
+            f"existing_size_bytes:{existing_size}",
+            f"downloaded_size_bytes:{actual_size}",
+            f"existing_sha256:{existing_digest}",
+            f"downloaded_sha256:{digest}",
+        ]
+        if staging_archive_path.exists():
+            warnings.append(str(_move_to_quarantine(staging_archive_path, quarantine_root)))
+        return _result(
+            status="quarantined",
+            reason_code="existing_destination_remote_content_mismatch",
+            reason=(
+                "The existing valid database does not exactly match the freshly "
+                "downloaded, validated remote artifact; the existing file was "
+                "preserved and the remote copy was quarantined."
+            ),
+            site=site,
+            case_id=case_id,
+            started_at_utc=started,
+            saved_path=str(final_path.resolve()),
+            quarantine_path=str(quarantined_database),
+            size_bytes=existing_size,
+            sha256=existing_digest,
+            database_validation=adoption_validation,
+            warnings=warnings,
+            **context,
+        )
+
     if final_path.exists():
         quarantined = _move_to_quarantine(staging_path, quarantine_root)
         warnings = []
@@ -1063,7 +1469,12 @@ def write_result_report(result: AcquisitionResult, report_path: Path) -> Path:
     return target
 
 
-def _failure_from_exception(site: str, case_id: str, started: str, exc: Exception) -> AcquisitionResult:
+def _failure_from_exception(
+    site: str,
+    case_id: str,
+    started: str,
+    exc: Exception,
+) -> AcquisitionResult:
     code = (
         "configuration_failure"
         if isinstance(exc, AcquisitionConfigurationError)

@@ -224,6 +224,59 @@ external destination, including `_reports\acquisition_summary.json` and
 `_reports\acquisition_summary.md`. This is a validation tool, not the resumable
 bulk acquisition workflow planned in TODO #4.
 
+### Resumable Bulk Commercial Acquisition
+
+Create a UTF-8 text manifest containing one explicit case ID per line, then run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\acquire_localdb_bulk.py `
+  --site "122" `
+  --case-manifest "C:\path\outside\git\asui_122_cases.txt" `
+  --sites-file ".\tools\profoundtools\sites.json" `
+  --sync-tool-root ".\tools\profoundtools" `
+  --destination "C:\path\to\clean\ASUI_122" `
+  --backend-dir ".\outputs\acquisition\ASUI_122\Backend"
+```
+
+Alternatively, repeat `--case-id` for every selected case. The command never
+discovers an implicit bulk selection. It requires unique case IDs using the
+selected site prefix and preserves the established
+`<destination>\<case-id>\local.db` structure.
+
+The required `--backend-dir` must be outside the final destination. The final
+destination remains limited to `<case-id>\local.db`; technical records are kept
+beneath the backend:
+
+```text
+Backend/
+|-- _staging/
+|-- _quarantine/
+`-- _acquisition/
+    |-- inventory.json
+    |-- inventory.csv
+    |-- acquisition.lock
+    `-- runs/<run-id>/
+        |-- run_report.json
+        |-- run_report.md
+        |-- case_results.csv
+        `-- cases/<case-id>_acquisition.json
+```
+
+Inventory is checkpointed after every case. A valid existing database without
+inventory is reported and skipped locally, with `remote_content_not_compared`
+recorded; it is never silently ignored or overwritten. Use
+`--verify-and-adopt-existing` when an exact fresh remote download/hash comparison
+is required to establish its first verified inventory record. Once verified,
+reruns reuse it only when local validation/hash, prior inventory, and current
+remote path/size/modification metadata all agree. Interrupted staging files are
+moved to backend quarantine before retry. Case failures are isolated, and the
+backend lock prevents concurrent runs. When `PatientId` is unavailable, required
+download identity may fall back only to an unambiguous match between the sole
+internal `Sessions.Start` and the exact selected session-folder timestamp within
+two seconds.
+Add `--allow-session-zip-fallback` only when the operator intends to permit the
+same ambiguity-safe non-`Raw.zip` fallback validated by the smaller runners.
+
 ### Standardized Timing Gantt Deliverables
 
 Build human-facing final deliverables from existing timing Gantt run folders:

@@ -31,6 +31,10 @@ execution.
   Credential Manager. It follows the verified case/session hierarchy, ignores
   `applog`, quarantines ambiguity, validates SQLite before publication, and
   keeps credentials and acquired data outside Git.
+- Added scalable bulk `local.db` acquisition for explicit case IDs or a text
+  manifest. It checkpoints a durable inventory, isolates case failures,
+  supports safe reruns and optional exact-hash adoption, and requires staging,
+  quarantine, and reports to use a backend outside the clean case destination.
 - Removed committed Python bytecode, two duplicate clinical-derived SQLite
   fixtures, and their tracked generated CSV/PNG validation outputs. Integration
   tests now create a deterministic, minimal, non-clinical SQLite fixture at run
@@ -51,14 +55,17 @@ execution.
 - Source clinical databases are read-only. Profiling is opt-in and does not
   alter case selection, database resolution, output schemas, or publication
   gates.
+- Bulk acquisition never discovers an implicit selection or overwrites an
+  existing database. Existing files without inventory are validated locally,
+  reported as skips, and are not presented as remote-verified artifacts.
 
 ## Validation
 
-- Full pytest suite after the completed acquisition slice: `130 passed`.
-- Focused single-case acquisition regression: `16 passed`.
+- Full pytest suite after the bulk acquisition slice: `153 passed`.
+- Focused single-, multi-, and bulk-acquisition regression: `39 passed`.
 - Synthetic SQLite pipeline regression: `3 passed`.
-- CLI help checks passed for the staged pipeline, validated wide exporter, and
-  timing-Gantt deliverable builder.
+- CLI help checks passed for the staged pipeline, validated wide exporter,
+  timing-Gantt deliverable builder, and bulk acquisition command.
 - `pip check`: no broken requirements.
 - `git diff --check`: no whitespace errors; Git reports only expected Windows
   LF/CRLF conversion notices.
@@ -78,6 +85,10 @@ execution.
 - Live acceptance case `122_01-001` passed immutable read-only SQLite integrity,
   schema, relationship, size, SHA-256, report-sanitization, and post-download
   source-presence checks. Its database and report were written outside Git.
+- The final explicit ASUI_122 run accounted for all 19 requested numeric cases:
+  5 downloads, 11 inventory-verified reuses, 3 reported local-only skips, and no
+  failures or quarantines. Independent immutable validation passed for all 19
+  final databases, and the shared case root contains no acquisition backend.
 
 ## Known limitations and follow-up work
 
@@ -91,5 +102,8 @@ execution.
   optimization remain separate follow-up work in `TODO.md`.
 - The dependency-gated five-case validation in TODO #3 is complete for explicit
   cases `122_01-001` through `122_01-005`: all five passed independent database,
-  identity, destination, reporting, and source-metadata checks. Scalable bulk
-  acquisition has not been implemented.
+  identity, destination, reporting, and source-metadata checks.
+- Three pre-existing ASUI_122 files (`122_01-003`, `122_01-007`, and
+  `122_01-009`) were intentionally handled as local-only skips. They passed
+  read-only local validation, but remote-content equivalence was not asserted;
+  the opt-in exact-hash adoption mode can establish that provenance later.

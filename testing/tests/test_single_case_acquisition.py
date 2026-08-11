@@ -437,6 +437,34 @@ def test_verbose_logging_suppresses_signed_transport_urls() -> None:
     assert logging.getLogger("requests").level == logging.WARNING
 
 
+def test_default_existing_destination_behavior_remains_quarantined(
+    tmp_path: Path,
+) -> None:
+    source = _create_valid_database(tmp_path / "source" / "local.db")
+    link = FakeLink(_success_tree(source.stat().st_size), source)
+    destination = tmp_path / "destination"
+
+    first = acquire_single_case(
+        link=link,
+        site="122",
+        case_id="122_01-001",
+        destination=destination,
+        session_key=_session_key,
+    )
+    second = acquire_single_case(
+        link=link,
+        site="122",
+        case_id="122_01-001",
+        destination=destination,
+        session_key=_session_key,
+    )
+
+    assert first.status == "success"
+    assert second.status == "quarantined"
+    assert second.reason_code == "destination_already_exists"
+    assert link.download_calls == 1
+
+
 def test_exception_text_redacts_urls_and_signed_fields() -> None:
     error = RuntimeError(
         "GET https://ln5.sync.com/path?pltoken=secret&signature=hidden failed"

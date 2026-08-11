@@ -47,6 +47,18 @@ explicit site + at least five unique case IDs
   -> case-level JSON + aggregate JSON/Markdown summaries
 ```
 
+The production-oriented acquisition layer remains explicit and composes the
+same case gate:
+
+```text
+explicit site + repeated case IDs or text manifest
+  -> bulk_acquisition.py
+  -> separate backend lock + durable case inventory
+  -> single-case acquisition, reported existing-file skip, or verified reuse
+  -> <destination>/<case_id>/local.db
+  -> <backend>/{_acquisition,_staging,_quarantine}
+```
+
 `first_slice_cli.py` is the staged-pipeline orchestrator. It coordinates the
 flow above and records run-level, case-level, and artifact-level status without
 embedding the implementation of each stage.
@@ -85,7 +97,17 @@ embedding the implementation of each stage.
 - `multi_case_acquisition.py` is the dependency-gated five-or-more-case
   validation surface. It requires unique explicit same-site IDs, isolates case
   failures, requires internal case identity, and produces machine- and
-  human-readable summaries. Resumable bulk acquisition remains deferred.
+  human-readable summaries.
+- `bulk_acquisition.py` is the scalable explicit-selection layer. It checkpoints
+  a case-level JSON/CSV inventory after every case, requires a technical backend
+  outside the clean destination, isolates failures, and recovers interrupted
+  staging files. It reports and skips valid pre-existing databases, supports
+  opt-in exact remote-hash adoption, and reuses verified files only when local
+  validation, prior inventory, and current remote metadata agree. Required
+  identity uses `PatientId` when available; otherwise a downloaded artifact must
+  have one `Sessions.Start` matching the exact selected session-folder timestamp
+  within two seconds. It does not discover cases implicitly or call source-share
+  mutation APIs.
 
 ## Legacy Compatibility Surface
 

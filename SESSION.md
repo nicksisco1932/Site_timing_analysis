@@ -6,10 +6,10 @@ Site Timing Analysis (legacy R workflow migrated to a staged Python pipeline)
 
 ## Current Objective
 
-TODO #3 is complete: five explicitly selected commercial Sync.com `local.db`
-files were acquired and independently validated end to end without changing the
-existing `applog` workflow. Scalable bulk acquisition remains TODO #4 and has
-not been started.
+TODO #4 is complete. The reusable bulk command supports explicit manifests,
+durable inventory, safe reruns, case isolation, a clean case-only destination,
+and complete reports in a required separate backend without changing the
+existing `applog` workflow. Live ASUI_122 acceptance passed for 19 cases.
 
 ## Governing Files
 
@@ -54,19 +54,23 @@ not been started.
   It requires at least five unique same-site case IDs, reuses one read-only
   connection, isolates per-case failures, requires internal case identity, and
   writes case JSON plus aggregate JSON/Markdown reports outside Git.
+- Added the scalable explicit bulk acquisition runner. It checkpoints JSON/CSV
+  inventory after every case in a required backend outside the final
+  destination, recovers interrupted staging files to backend quarantine,
+  reports and skips valid pre-existing databases, and reuses verified outputs
+  only when local validation, prior inventory, and current remote metadata agree.
 
 ### Not Yet Implemented
 
 - Full formal parity diffing against historical R outputs.
 - `.xlsx` timing-log enrichment.
 - Broader multi-site curated-store/catalog workflow.
-- Scalable bulk commercial `local.db` acquisition.
 
 ## Current Blocker
 
-None for TODO #3. TODO #4 intentionally remains deferred pending review of the
-five-case evidence and an explicitly supplied bulk destination and selection
-contract.
+No blocker is active for TODO #4. Three ASUI_122 pre-existing databases were
+intentionally reported as local-only skips; their remote-content equivalence was
+not asserted, exactly as required by the current operational rule.
 
 ## Data Governance
 
@@ -98,6 +102,9 @@ contract.
 - Keep five-case validation separate from TODO #4: the current runner is
   sequential and deliberately does not add resumability or bulk overwrite
   behavior.
+- Bulk selection is never discovered implicitly. Safe reuse requires matching
+  local validation/hash, prior inventory, and current remote metadata; otherwise
+  the case is quarantined without overwrite.
 
 ## Known Issues
 
@@ -150,6 +157,18 @@ contract.
   or token markers.
 - Post-run remote listing found one unchanged direct `local.db` per selected
   case by recorded size and modification timestamp; `applog` was not traversed.
+- Bulk acquisition regression, including the single- and five-case surfaces:
+  `39 passed`. A 25-case synthetic run downloaded each database once and an
+  identical second run reused all 25 with zero additional downloads. Tests also
+  cover manifest rejection, source/local mismatch, missing inventory,
+  interruption recovery, destination locking, and case failure isolation.
+- Live ASUI_122 bulk acceptance requested 19 numeric cases and completed with
+  `19` successes, `5` downloads, `11` verified reuses, `3` reported local-only
+  skips, `0` failures, and `0` quarantines. Independent immutable read-only
+  validation passed for all 19 files. Technical records are under the ignored
+  `outputs\acquisition\ASUI_122\Backend`; the shared site root contains no
+  acquisition, quarantine, or staging directory.
+- Full repository suite after final bulk amendments: `153 passed` in `68.02s`.
 - `pip check` reports no broken requirements.
 - `git diff --check` reports no whitespace errors; Git only reports normal
   Windows LF/CRLF conversion warnings.
@@ -160,9 +179,8 @@ contract.
 
 ## Next Recommended Step
 
-Review the five-case JSON/Markdown summaries and acquired databases if desired.
-Begin TODO #4 only after explicitly approving the bulk selection, destination,
-resumability, and overwrite-protection contract.
+Review and choose whether to begin TODO #5, the durable analytical database
+design and migration plan.
 
 ## Resume Instructions
 
@@ -170,5 +188,5 @@ resumability, and overwrite-protection contract.
 2. Read `SOP.md`.
 3. Read `ARCHITECTURE.md`.
 4. Read `SESSION.md`.
-5. Treat TODO #3 as complete and begin TODO #4 only after explicit user
-   approval of the bulk acquisition contract and destination.
+5. Treat TODO #4 as complete and preserve its separate-backend and
+   existing-file-awareness contracts for future sites.

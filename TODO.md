@@ -189,6 +189,8 @@ Completion evidence:
 
 **Depends on:** Successful completion of TODO #3.
 
+**Status:** Completed 2026-08-11.
+
 **Rationale:** Once representative cases establish safe matching and
 validation rules, provide a resumable command that eliminates manual
 case-by-case web downloads while producing inputs Timeline Analysis already
@@ -209,6 +211,13 @@ the single-case and five-case tests are complete. The command must:
 - validate SQLite integrity, required tables, case identity, file size, and
   SHA-256;
 - maintain a case-level acquisition inventory;
+- keep the final destination clean: it may contain case directories and their
+  sanitized `local.db` files, but technical inventory, reports, staging, and
+  quarantine artifacts must be written to a separately supplied backend path;
+- detect an existing `<destination>\<case-id>\local.db`, validate it read-only,
+  skip download/overwrite, and record that explicit skip in the inventory and
+  run report; do not claim remote-content equivalence unless a prior inventory
+  or an explicit remote hash-verification run proves it;
 - avoid silently overwriting an existing valid file;
 - be resumable and safe to rerun;
 - place files in the exact case-specific structure expected by Timeline
@@ -220,6 +229,44 @@ requested case set; the expected Timeline Analysis directory structure is
 produced; a complete acquisition report and inventory are written; failures
 are isolated by case without guessed or fabricated files; reruns are safe; and
 the source share and databases remain read-only.
+
+Implementation evidence:
+
+- Added `scripts\acquire_localdb_bulk.py` with exactly one required selection
+  mechanism: repeated `--case-id` arguments or a UTF-8 `--case-manifest`.
+- The command composes the validated exact-folder/session/database logic,
+  requires internal case identity, supports opt-in session-export ZIP fallback,
+  and preserves `<destination>\<case-id>\local.db`.
+- Added durable inventory, run-specific JSON/Markdown/CSV reports, staging, and
+  quarantine under a required backend path that must be outside the clean final
+  destination.
+- Safe reruns reuse a database only when its validation, size, SHA-256, saved
+  path, prior inventory, and current remote path/size/modification metadata all
+  agree. A valid pre-existing database without inventory is explicitly reported
+  and skipped without download or overwrite; its remote equivalence remains
+  unverified unless the operator opts into exact remote hash verification.
+- Added a destination process lock and recoverable quarantine of interrupted
+  staging files. Case failures remain isolated and processing continues.
+- A 25-case synthetic scale run downloaded all cases once; an identical rerun
+  reused all 25 with zero additional downloads. Focused acquisition tests:
+  `39 passed`; final full repository suite: `153 passed`.
+- The first explicit ASUI_122 live run requested 19 numeric cases. It produced
+  11 successes and eight safe quarantines: every database passed SQLite,
+  required-schema, and relational-link checks, while the eight quarantines had
+  unavailable internal `PatientId` identity. Technical artifacts initially
+  written beside the case folders were moved intact to the Git-ignored
+  `outputs\acquisition\ASUI_122\Backend`; the shared destination now contains no
+  `_acquisition`, `_quarantine`, or `_staging` directory.
+- The corrected 19-case run completed with `19` successes, `0` failures, and `0`
+  quarantines: `5` downloaded, `11` inventory-verified reuses, and `3` explicitly
+  reported local-only existing-file skips. Cases `010` through `014` passed the
+  exact case-folder plus `Sessions.Start` identity fallback.
+- Independent immutable read-only validation confirmed all 19 files, SQLite
+  headers, integrity checks, required tables, relational links, and report
+  invariants. The shared root contains only case-level content; all acquisition
+  bookkeeping remains in the separate Git-ignored backend.
+- Final checks: CLI help passed, `pip check` passed, and `git diff --check`
+  reported no whitespace errors beyond normal Windows line-ending notices.
 
 ## 5. Create a durable analytical database
 

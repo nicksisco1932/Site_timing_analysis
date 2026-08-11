@@ -17,6 +17,20 @@
 - Completed the live `122_01-001` through `122_01-005` validation: all five
   direct databases passed with no failure or quarantine, and post-run remote
   metadata remained unchanged.
+- Added the explicit resumable bulk acquisition CLI with text-manifest support,
+  per-case inventory checkpoints, destination locking, safe existing-file
+  reuse, stale-staging recovery, failure isolation, and per-run JSON/Markdown/CSV
+  reports. Live bulk acceptance remains pending an operator-supplied destination
+  and case manifest.
+- Required bulk technical artifacts to use a backend path outside the clean
+  case destination. Valid pre-existing databases are reported and skipped
+  without overwrite; optional exact remote-hash adoption remains available.
+- Added a strict identity fallback for databases without `PatientId`: the sole
+  internal `Sessions.Start` must match the exact selected Sync session-folder
+  timestamp within two seconds.
+- Completed the explicit 19-case ASUI_122 bulk acceptance with 19 successes,
+  no failures or quarantines, and independent read-only validation of every
+  final database. Technical artifacts remain outside the shared case root.
 
 ## 2026-08-10 - Repository Stabilization and Hygiene
 
