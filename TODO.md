@@ -131,9 +131,13 @@ Completion evidence:
 - Focused acquisition regression: `16 passed`. Full repository suite:
   `130 passed`. CLI help, `pip check`, and `git diff --check` pass.
 
-## 3. Validate acquisition with at least five cases
+## 3. Validate acquisition with at least five cases — Completed 2026-08-11
 
 **Depends on:** Successful completion of TODO #2.
+
+**Status:** Completed. Five explicitly selected site-122 cases passed the live,
+read-only acquisition and independent verification gates with no unresolved
+issues.
 
 **Rationale:** A multi-case test is needed to expose real differences in remote
 folder structure, naming, identity, and database packaging before bulk use.
@@ -156,6 +160,30 @@ unresolved. Keep all source data read-only.
 maps to exactly one valid `local.db`; files use the expected case-specific
 directory structure; machine-readable and human-readable summaries classify
 success, failure, quarantine, and reasons; and no source data is modified.
+
+Completion evidence:
+
+- Acquired the explicit set `122_01-001` through `122_01-005` to
+  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_acquisition_test\`
+  `2026-08-11_site122_five_case_validation` in `94.7` seconds.
+- All five cases resolved through one exact case folder and one timestamped
+  session folder to a direct case-insensitive `local.db`; results were `5`
+  success, `0` failure, and `0` quarantine. No ZIP fallback was enabled.
+- Every database was saved as `<destination>\<case-id>\local.db`. Independent
+  immutable read-only checks matched each reported size and SHA-256, returned
+  SQLite integrity `ok`, found all required tables, found zero relationship
+  orphans, and verified the normalized internal `PatientId` against the selected
+  case ID. Saved paths and database hashes are unique.
+- Wrote five case-level JSON reports plus
+  `_reports\acquisition_summary.json` and
+  `_reports\acquisition_summary.md`. The summaries contain no Sync URL,
+  password, signed token, data key, or signature marker.
+- No staging or quarantine files remain. A post-run read-only remote listing
+  found exactly one direct database for every selected case and matched the
+  recorded source size and modification timestamp for all five; `applog` was
+  present but not traversed.
+- Focused acquisition regression: `23 passed`. Full repository suite:
+  `137 passed`. CLI help and Python compilation checks pass.
 
 ## 4. Add scalable bulk `local.db` acquisition
 

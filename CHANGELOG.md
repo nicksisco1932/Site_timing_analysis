@@ -11,6 +11,12 @@
   transport URLs from verbose logging.
 - Completed the live `122_01-001` acceptance acquisition with independent
   SQLite, size, hash, report-sanitization, and source-read-only checks.
+- Added a separate explicit multi-case validation runner with unique same-site
+  selection, case isolation, required internal identity checks, and aggregate
+  JSON/Markdown reporting.
+- Completed the live `122_01-001` through `122_01-005` validation: all five
+  direct databases passed with no failure or quarantine, and post-run remote
+  metadata remained unchanged.
 
 ## 2026-08-10 - Repository Stabilization and Hygiene
 

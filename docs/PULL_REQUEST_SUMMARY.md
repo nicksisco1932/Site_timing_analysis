@@ -89,5 +89,7 @@ execution.
   published as partial and is not a complete 149-case deliverable.
 - Formal R-output parity, a durable analytical database, and further measured
   optimization remain separate follow-up work in `TODO.md`.
-- Multi-case acquisition remains dependency-gated behind the explicit five-case
-  validation in TODO #3; scalable bulk acquisition has not been implemented.
+- The dependency-gated five-case validation in TODO #3 is complete for explicit
+  cases `122_01-001` through `122_01-005`: all five passed independent database,
+  identity, destination, reporting, and source-metadata checks. Scalable bulk
+  acquisition has not been implemented.

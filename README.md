@@ -197,6 +197,33 @@ orphan links are validated before publication as
 `<destination>\<case-id>\local.db`. The exact saved or quarantine path is
 printed and recorded in a JSON result report.
 
+### Five-Case Commercial Acquisition Validation
+
+After the single-case gate succeeds, validate at least five unique, explicit
+cases with one read-only connection:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\test_multi_case_localdb_acquisition.py `
+  --site "122" `
+  --case-id "122_01-001" `
+  --case-id "122_01-002" `
+  --case-id "122_01-003" `
+  --case-id "122_01-004" `
+  --case-id "122_01-005" `
+  --sites-file ".\tools\profoundtools\sites.json" `
+  --sync-tool-root ".\tools\profoundtools" `
+  --destination "C:\path\outside\git\five_case_acquisition_test"
+```
+
+The command requires five or more unique case IDs using the selected site
+prefix. Each case independently passes the single-case folder/database gates
+plus required internal case-identity verification. It continues after a case
+failure so the aggregate JSON and Markdown summaries classify every requested
+case as success, failure, or quarantine. Outputs are written beneath the
+external destination, including `_reports\acquisition_summary.json` and
+`_reports\acquisition_summary.md`. This is a validation tool, not the resumable
+bulk acquisition workflow planned in TODO #4.
+
 ### Standardized Timing Gantt Deliverables
 
 Build human-facing final deliverables from existing timing Gantt run folders:

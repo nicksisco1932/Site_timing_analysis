@@ -21,6 +21,7 @@ import zipfile
 
 from site_timing_analysis.single_case_acquisition import (
     _configure_logging,
+    _safe_exception_text,
     acquire_single_case,
     validate_downloaded_database,
     validate_sync_url,
@@ -434,3 +435,16 @@ def test_verbose_logging_suppresses_signed_transport_urls() -> None:
 
     assert logging.getLogger("urllib3").level == logging.WARNING
     assert logging.getLogger("requests").level == logging.WARNING
+
+
+def test_exception_text_redacts_urls_and_signed_fields() -> None:
+    error = RuntimeError(
+        "GET https://ln5.sync.com/path?pltoken=secret&signature=hidden failed"
+    )
+
+    sanitized = _safe_exception_text(error)
+
+    assert "https://" not in sanitized
+    assert "secret" not in sanitized
+    assert "hidden" not in sanitized
+    assert "<redacted-url>" in sanitized

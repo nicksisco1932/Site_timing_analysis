@@ -36,6 +36,17 @@ explicit commercial site + case selection
   -> ordinary site-root discovery when explicitly selected for analysis
 ```
 
+The dependency-gated representative validation composes that contract without
+changing the core timing pipeline:
+
+```text
+explicit site + at least five unique case IDs
+  -> multi_case_acquisition.py
+  -> sequential single-case acquisition through one read-only connection
+  -> required internal case-identity verification
+  -> case-level JSON + aggregate JSON/Markdown summaries
+```
+
 `first_slice_cli.py` is the staged-pipeline orchestrator. It coordinates the
 flow above and records run-level, case-level, and artifact-level status without
 embedding the implementation of each stage.
@@ -70,8 +81,11 @@ embedding the implementation of each stage.
   case folder, ignores `applog`, inspects timestamped session children, rejects
   ambiguity, and supports opt-in session-export ZIP fallback only when no direct
   database exists. It reuses the ProfoundTools Sync transport snapshot under
-  `tools/profoundtools` without changing its `applog` planner; multi-case and
-  bulk acquisition remain deferred.
+  `tools/profoundtools` without changing its `applog` planner.
+- `multi_case_acquisition.py` is the dependency-gated five-or-more-case
+  validation surface. It requires unique explicit same-site IDs, isolates case
+  failures, requires internal case identity, and produces machine- and
+  human-readable summaries. Resumable bulk acquisition remains deferred.
 
 ## Legacy Compatibility Surface
 

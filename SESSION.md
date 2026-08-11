@@ -6,10 +6,10 @@ Site Timing Analysis (legacy R workflow migrated to a staged Python pipeline)
 
 ## Current Objective
 
-TODO #2 is complete: one explicitly selected commercial Sync.com `local.db`
-was acquired and validated end to end without changing the existing `applog`
-workflow. The next dependency-gated acquisition step is TODO #3, the explicit
-five-case validation.
+TODO #3 is complete: five explicitly selected commercial Sync.com `local.db`
+files were acquired and independently validated end to end without changing the
+existing `applog` workflow. Scalable bulk acquisition remains TODO #4 and has
+not been started.
 
 ## Governing Files
 
@@ -50,19 +50,23 @@ five-case validation.
 - Relocated the required ProfoundTools `sync-tdc-logs` snapshot to the stable
   repository path `tools/profoundtools`; its source and `applog` behavior remain
   unchanged, and credential-bearing runtime files remain ignored.
+- Added and live-validated the dependency-gated multi-case acquisition runner.
+  It requires at least five unique same-site case IDs, reuses one read-only
+  connection, isolates per-case failures, requires internal case identity, and
+  writes case JSON plus aggregate JSON/Markdown reports outside Git.
 
 ### Not Yet Implemented
 
 - Full formal parity diffing against historical R outputs.
 - `.xlsx` timing-log enrichment.
 - Broader multi-site curated-store/catalog workflow.
-- Five-case and scalable bulk commercial `local.db` acquisition.
+- Scalable bulk commercial `local.db` acquisition.
 
 ## Current Blocker
 
-None for TODO #2. TODO #3 intentionally awaits an explicitly selected set of at
-least five cases and a supplied external destination before any multi-case
-acquisition is attempted.
+None for TODO #3. TODO #4 intentionally remains deferred pending review of the
+five-case evidence and an explicitly supplied bulk destination and selection
+contract.
 
 ## Data Governance
 
@@ -91,6 +95,9 @@ acquisition is attempted.
 - Use `scripts/setup_sync_credential.ps1` for concealed credential setup or
   removal; the script delegates storage to the unchanged ProfoundTools keyring
   utility and never accepts a password argument.
+- Keep five-case validation separate from TODO #4: the current runner is
+  sequential and deliberately does not add resumability or bulk overwrite
+  behavior.
 
 ## Known Issues
 
@@ -130,6 +137,19 @@ acquisition is attempted.
   contains no Sync URL, password, signed-download token, or signature marker.
   No staging or quarantine files remain, and a post-run listing confirmed the
   remote source remained present and unchanged.
+- Multi-case acquisition regression, including the single-case tests:
+  `23 passed`. Full repository suite after TODO #3: `137 passed` in `69.50s`.
+- Live cases `122_01-001` through `122_01-005` completed in `94.7s` with `5`
+  success, `0` failure, and `0` quarantine at
+  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_acquisition_test\`
+  `2026-08-11_site122_five_case_validation`.
+- Independent immutable read-only verification matched all five paths, sizes,
+  SHA-256 digests, schemas, relationship checks, and internal case identities.
+  The aggregate invariants all pass; five case reports and both aggregate
+  reports are present, with zero staging/quarantine files and no sensitive URL
+  or token markers.
+- Post-run remote listing found one unchanged direct `local.db` per selected
+  case by recorded size and modification timestamp; `applog` was not traversed.
 - `pip check` reports no broken requirements.
 - `git diff --check` reports no whitespace errors; Git only reports normal
   Windows LF/CRLF conversion warnings.
@@ -140,10 +160,9 @@ acquisition is attempted.
 
 ## Next Recommended Step
 
-Manually inspect the acquired `122_01-001` database if desired. When ready for
-TODO #3, supply at least five explicit case IDs and an external destination,
-then run the dependency-gated multi-case validation without beginning bulk
-acquisition.
+Review the five-case JSON/Markdown summaries and acquired databases if desired.
+Begin TODO #4 only after explicitly approving the bulk selection, destination,
+resumability, and overwrite-protection contract.
 
 ## Resume Instructions
 
@@ -151,5 +170,5 @@ acquisition.
 2. Read `SOP.md`.
 3. Read `ARCHITECTURE.md`.
 4. Read `SESSION.md`.
-5. Treat TODO #2 as complete and begin TODO #3 only after the user explicitly
-   supplies the five-case selection and destination.
+5. Treat TODO #3 as complete and begin TODO #4 only after explicit user
+   approval of the bulk acquisition contract and destination.

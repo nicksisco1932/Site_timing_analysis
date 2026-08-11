@@ -30,7 +30,7 @@ download is promoted from staging only after read-only SQLite validation.
 Assumptions and limitations
 ---------------------------
 Direct ``local.db`` files are preferred. Optional session-export ZIP fallback is
-available only when no direct database exists. Multi-case acquisition remains
+available only when no direct database exists. Scalable bulk acquisition remains
 deferred. Remote ambiguity is quarantined logically; invalid downloaded bytes
 are moved beneath ``<destination>/_quarantine`` and are never published as a
 valid database.
@@ -92,6 +92,8 @@ class AcquisitionResult:
     remote_session_folder: str = ""
     remote_archive_name: str = ""
     remote_database_name: str = ""
+    remote_artifact_size_bytes: int = 0
+    remote_artifact_usertime: int = 0
     saved_path: str = ""
     quarantine_path: str = ""
     size_bytes: int = 0
@@ -257,6 +259,18 @@ def _result(
     )
 
 
+def _safe_exception_text(exc: Exception) -> str:
+    """Return an exception description with URLs and signed fields redacted."""
+    text = f"{type(exc).__name__}: {exc}"
+    text = re.sub(r"https?://[^\s)\]}]+", "<redacted-url>", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(?i)\b(password|pltoken|datakey|signature|cachekey)=([^\s&]+)",
+        r"\1=<redacted>",
+        text,
+    )
+    return text
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -269,7 +283,71 @@ def _quoted_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def validate_downloaded_database(path: Path) -> dict[str, Any]:
+def _normalized_case_identity(value: str) -> str:
+    """Normalize case-ID separators without exposing an internal patient value."""
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip()).strip("_").casefold()
+
+
+def _validate_database_case_identity(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    columns_by_table: dict[str, set[str]],
+    expected_case_id: str,
+) -> dict[str, Any]:
+    """Compare nonempty database case identifiers without reporting raw values.
+
+    The commercial databases commonly encode the case ID in ``PatientId`` with
+    different punctuation from the source-folder convention. Comparison is
+    therefore case-insensitive and separator-insensitive, but otherwise exact.
+    Missing identity values are reported as unavailable rather than fabricated.
+    """
+    checked_fields: list[str] = []
+    normalized_values: set[str] = set()
+    nonempty_rows = 0
+    for table in ("Sessions", "AuditLogRecords"):
+        if table not in tables or "PatientId" not in columns_by_table.get(table, set()):
+            continue
+        checked_fields.append(f"{table}.PatientId")
+        for row in connection.execute(
+            f"SELECT PatientId FROM {_quoted_identifier(table)} "
+            "WHERE PatientId IS NOT NULL AND TRIM(PatientId) <> ''"
+        ):
+            nonempty_rows += 1
+            normalized = _normalized_case_identity(str(row[0]))
+            if normalized:
+                normalized_values.add(normalized)
+
+    expected_normalized = _normalized_case_identity(expected_case_id)
+    if not normalized_values:
+        status = "NOT_AVAILABLE"
+        reason = "No nonempty PatientId value is available in the checked tables."
+    elif len(normalized_values) != 1:
+        status = "FAIL"
+        reason = "Database PatientId fields contain multiple normalized identities."
+    elif normalized_values != {expected_normalized}:
+        status = "FAIL"
+        reason = "Database PatientId does not match the selected case ID."
+    else:
+        status = "PASS"
+        reason = "Database PatientId matches the selected case ID after separator normalization."
+
+    return {
+        "status": status,
+        "reason": reason,
+        "comparison_rule": "case-insensitive exact match after separator normalization",
+        "expected_case_id": expected_case_id,
+        "fields_checked": checked_fields,
+        "nonempty_rows": nonempty_rows,
+        "distinct_normalized_values": len(normalized_values),
+    }
+
+
+def validate_downloaded_database(
+    path: Path,
+    *,
+    expected_case_id: str | None = None,
+    require_case_identity: bool = False,
+) -> dict[str, Any]:
     """Validate a downloaded database read-only and return identity/schema facts."""
     validation: dict[str, Any] = {
         "status": "FAIL",
@@ -281,6 +359,7 @@ def validate_downloaded_database(path: Path) -> dict[str, Any]:
         "row_counts": {},
         "auditlog_treatment_orphans": None,
         "treatment_session_orphans": None,
+        "case_identity": {},
         "error": "",
     }
     try:
@@ -317,6 +396,7 @@ def validate_downloaded_database(path: Path) -> dict[str, Any]:
         validation["missing_required_tables"] = missing_tables
 
         missing_columns: dict[str, list[str]] = {}
+        columns_by_table: dict[str, set[str]] = {}
         for table, required_columns in REQUIRED_COLUMNS.items():
             if table not in tables:
                 continue
@@ -326,6 +406,7 @@ def validate_downloaded_database(path: Path) -> dict[str, Any]:
                     f"PRAGMA table_info({_quoted_identifier(table)})"
                 )
             }
+            columns_by_table[table] = columns
             missing = sorted(set(required_columns).difference(columns))
             if missing:
                 missing_columns[table] = missing
@@ -354,6 +435,13 @@ def validate_downloaded_database(path: Path) -> dict[str, Any]:
                     "WHERE t.SessionId IS NOT NULL AND s.Id IS NULL"
                 ).fetchone()[0]
             )
+        if expected_case_id is not None:
+            validation["case_identity"] = _validate_database_case_identity(
+                connection,
+                set(tables),
+                columns_by_table,
+                expected_case_id,
+            )
     except sqlite3.Error as exc:
         validation["error"] = f"database_validation_failed:{exc}"
         return validation
@@ -371,6 +459,10 @@ def validate_downloaded_database(path: Path) -> dict[str, Any]:
         failures.append("auditlog_treatment_orphans")
     if validation["treatment_session_orphans"]:
         failures.append("treatment_session_orphans")
+    if validation["case_identity"].get("status") == "FAIL":
+        failures.append("case_identity_mismatch")
+    elif require_case_identity and validation["case_identity"].get("status") != "PASS":
+        failures.append("case_identity_unverified")
     validation["error"] = ";".join(failures)
     validation["status"] = "PASS" if not failures else "FAIL"
     return validation
@@ -445,6 +537,7 @@ def acquire_single_case(
     destination: Path,
     session_key: Callable[[str], str | None],
     allow_session_zip_fallback: bool = False,
+    require_case_identity: bool = False,
 ) -> AcquisitionResult:
     """Acquire one ``local.db`` from one exact case and timestamped session.
 
@@ -503,7 +596,7 @@ def acquire_single_case(
         return _result(
             status="failed",
             reason_code="remote_root_listing_failed",
-            reason=f"{type(exc).__name__}: {exc}",
+            reason=_safe_exception_text(exc),
             site=site,
             case_id=case_id,
             started_at_utc=started,
@@ -532,7 +625,7 @@ def acquire_single_case(
         return _result(
             status="failed",
             reason_code="remote_case_folder_discovery_failed",
-            reason=f"{type(exc).__name__}: {exc}",
+            reason=_safe_exception_text(exc),
             site=site,
             case_id=case_id,
             started_at_utc=started,
@@ -577,7 +670,7 @@ def acquire_single_case(
         return _result(
             status="failed",
             reason_code="remote_case_listing_failed",
-            reason=f"{type(exc).__name__}: {exc}",
+            reason=_safe_exception_text(exc),
             site=site,
             case_id=case_id,
             started_at_utc=started,
@@ -659,7 +752,7 @@ def acquire_single_case(
         return _result(
             status="failed",
             reason_code="remote_timestamped_session_listing_failed",
-            reason=f"{type(exc).__name__}: {exc}",
+            reason=_safe_exception_text(exc),
             site=site,
             case_id=case_id,
             started_at_utc=started,
@@ -739,11 +832,18 @@ def acquire_single_case(
             )
         session_folder, archive_item = session_export_candidates[0]
 
+    selected_remote_artifact = database_item if database_item is not None else archive_item
     context = {
         **case_context,
         "remote_session_folder": session_folder.name,
         "remote_archive_name": archive_item.name if archive_item is not None else "",
         "remote_database_name": database_item.name if database_item is not None else "local.db",
+        "remote_artifact_size_bytes": int(
+            getattr(selected_remote_artifact, "size", 0) or 0
+        ),
+        "remote_artifact_usertime": int(
+            getattr(selected_remote_artifact, "usertime", 0) or 0
+        ),
     }
 
     staging_path.parent.mkdir(parents=True, exist_ok=True)
@@ -759,7 +859,7 @@ def acquire_single_case(
             return _result(
                 status="failed",
                 reason_code="download_failed",
-                reason=f"{type(exc).__name__}: {exc}",
+                reason=_safe_exception_text(exc),
                 site=site,
                 case_id=case_id,
                 started_at_utc=started,
@@ -786,7 +886,7 @@ def acquire_single_case(
             return _result(
                 status="failed",
                 reason_code="session_export_download_failed",
-                reason=f"{type(exc).__name__}: {exc}",
+                reason=_safe_exception_text(exc),
                 site=site,
                 case_id=case_id,
                 started_at_utc=started,
@@ -832,7 +932,7 @@ def acquire_single_case(
             return _result(
                 status="quarantined",
                 reason_code="invalid_or_ambiguous_session_export_zip",
-                reason=f"{type(exc).__name__}: {exc}",
+                reason=_safe_exception_text(exc),
                 site=site,
                 case_id=case_id,
                 started_at_utc=started,
@@ -866,7 +966,11 @@ def acquire_single_case(
             **context,
         )
 
-    validation = validate_downloaded_database(staging_path)
+    validation = validate_downloaded_database(
+        staging_path,
+        expected_case_id=case_id,
+        require_case_identity=require_case_identity,
+    )
     digest = _sha256(staging_path)
     if validation["status"] != "PASS":
         quarantined = _move_to_quarantine(staging_path, quarantine_root)
@@ -968,7 +1072,7 @@ def _failure_from_exception(site: str, case_id: str, started: str, exc: Exceptio
     return _result(
         status="failed",
         reason_code=code,
-        reason=f"{type(exc).__name__}: {exc}",
+        reason=_safe_exception_text(exc),
         site=site,
         case_id=case_id,
         started_at_utc=started,
