@@ -6,10 +6,11 @@ Site Timing Analysis (legacy R workflow migrated to a staged Python pipeline)
 
 ## Current Objective
 
-TODO #4 is complete. The reusable bulk command supports explicit manifests,
-durable inventory, safe reruns, case isolation, a clean case-only destination,
-and complete reports in a required separate backend without changing the
-existing `applog` workflow. Live ASUI_122 acceptance passed for 19 cases.
+TODO #5 is complete. The site-ID-only availability command now compares
+configured Sync.com folder metadata with Teams-synced local case artifacts
+without acquiring or modifying data. Live site-122 acceptance found complete
+canonical parity across 19 cases. The next planned slice is TODO #6, the durable
+analytical database design and migration plan.
 
 ## Governing Files
 
@@ -59,6 +60,11 @@ existing `applog` workflow. Live ASUI_122 acceptance passed for 19 cases.
   destination, recovers interrupted staging files to backend quarantine,
   reports and skips valid pre-existing databases, and reuses verified outputs
   only when local validation, prior inventory, and current remote metadata agree.
+- Added the site-ID-only read-only availability and parity checker. It requires
+  one recognized remote session root and one local site directory, inventories
+  exact canonical case/database placement, excludes but reports noncanonical
+  folders, prints actionable differences, and optionally writes sanitized JSON
+  outside the Teams-synced tree.
 
 ### Not Yet Implemented
 
@@ -105,6 +111,9 @@ not asserted, exactly as required by the current operational rule.
 - Bulk selection is never discovered implicitly. Safe reuse requires matching
   local validation/hash, prior inventory, and current remote metadata; otherwise
   the case is quarantined without overwrite.
+- Site availability is inventory-only: remote `listdir` calls and local metadata
+  reads are permitted, while download, extraction, database inspection, staging,
+  and source modification remain outside that command.
 
 ## Known Issues
 
@@ -169,6 +178,12 @@ not asserted, exactly as required by the current operational rule.
   `outputs\acquisition\ASUI_122\Backend`; the shared site root contains no
   acquisition, quarantine, or staging directory.
 - Full repository suite after final bulk amendments: `153 passed` in `68.02s`.
+- Site-availability regression: `18 passed`. Full repository suite after TODO
+  #5: `171 passed`; CLI help and compilation checks pass.
+- Live site-122 availability acceptance returned exit `0` with remote root
+  `TDC Sessions`, `19` remote canonical cases, `19` local canonical cases, and
+  `19` complete matches. The checker reported one remote and two local
+  noncanonical folders separately and performed no acquisition or report write.
 - `pip check` reports no broken requirements.
 - `git diff --check` reports no whitespace errors; Git only reports normal
   Windows LF/CRLF conversion warnings.
@@ -179,8 +194,8 @@ not asserted, exactly as required by the current operational rule.
 
 ## Next Recommended Step
 
-Review and choose whether to begin TODO #5, the durable analytical database
-design and migration plan.
+Begin TODO #6 with an approved durable analytical database schema, migration
+plan, and validation strategy before implementation.
 
 ## Resume Instructions
 
@@ -190,3 +205,7 @@ design and migration plan.
 4. Read `SESSION.md`.
 5. Treat TODO #4 as complete and preserve its separate-backend and
    existing-file-awareness contracts for future sites.
+6. Treat TODO #5 as complete and preserve its inventory-only, sanitized-output,
+   and no-`applog` contracts.
+7. Continue with TODO #6, the durable analytical database design and migration
+   plan; profiling and optimization remain TODO #7.

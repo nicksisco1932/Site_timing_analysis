@@ -2,6 +2,11 @@
 
 ## 2026-08-11 - Validated Single-Case Acquisition
 
+- Added a site-ID-only, read-only availability and case-parity CLI for comparing
+  configured Sync.com session artifacts with Teams-synced canonical
+  `<case-id>\local.db` artifacts without downloading or inspecting databases.
+- Live site-122 acceptance found 19 remote and 19 local canonical cases with
+  complete parity; noncanonical remote/local folders were reported and excluded.
 - Added the repository-local ProfoundTools Sync transport and Windows keyring
   setup helper without storing credentials or share URLs in Git.
 - Corrected acquisition traversal to match an exact case folder, ignore

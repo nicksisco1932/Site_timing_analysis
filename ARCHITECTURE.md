@@ -59,6 +59,17 @@ explicit site + repeated case IDs or text manifest
   -> <backend>/{_acquisition,_staging,_quarantine}
 ```
 
+A separate preflight inventory checks endpoint availability without entering
+the acquisition or timing pipelines:
+
+```text
+explicit three-digit site ID
+  -> site_availability.py
+  -> read-only Sync.com folder metadata + Teams-synced local folder metadata
+  -> canonical case/artifact parity summary
+  -> console and optional sanitized JSON (no acquisition or database reads)
+```
+
 `first_slice_cli.py` is the staged-pipeline orchestrator. It coordinates the
 flow above and records run-level, case-level, and artifact-level status without
 embedding the implementation of each stage.
@@ -108,6 +119,12 @@ embedding the implementation of each stage.
   have one `Sessions.Start` matching the exact selected session-folder timestamp
   within two seconds. It does not discover cases implicitly or call source-share
   mutation APIs.
+- `site_availability.py` is the non-acquiring site preflight. It resolves one
+  configured Sync share and one Teams-synced site directory, enforces one
+  recognized `TDC Sessions`/`TDC Data` root, inventories exact case/session
+  hierarchy and direct `local.db` metadata, and reports canonical case parity.
+  It uses remote listing and local filesystem metadata only; it does not call
+  download, extraction, SQLite, staging, or source-write paths.
 
 ## Legacy Compatibility Surface
 

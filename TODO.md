@@ -268,7 +268,115 @@ Implementation evidence:
 - Final checks: CLI help passed, `pip check` passed, and `git diff --check`
   reported no whitespace errors beyond normal Windows line-ending notices.
 
-## 5. Create a durable analytical database
+## 5. Add site availability and case parity — Completed 2026-08-11
+
+**Rationale:** Before acquiring or analyzing another site, provide a safe,
+read-only way to confirm that its configured Sync.com share and Teams-synced
+local directory are both available and to identify case-level differences
+without downloading or changing data.
+
+**Status:** Completed. The site-ID-only checker is implemented as an isolated
+inventory command and has passed focused, repository-wide, and live site-122
+validation.
+
+Planned command:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_site_availability.py --site 122
+```
+
+The command will accept a three-digit site ID and default to:
+
+- Sync registry `tools\profoundtools\sites.json`;
+- local parent `%USERPROFILE%\Profound Medical`; and
+- optional overrides `--sites-file`, `--local-root`, and `--report-json`.
+
+Remote inventory requirements:
+
+- Confirm that the site is configured and its Sync.com share is reachable
+  read-only.
+- Accept exactly one recognized root: either `TDC Sessions` or `TDC Data`. If
+  both or neither are available, report a root ambiguity or failure and exit
+  `2`.
+- Match exact `<case-id> TDC Sessions` folders and inspect only their immediate
+  timestamped session-folder children.
+- Treat a case-insensitive direct child named `local.db` as a candidate only
+  when it belongs to one of those session folders and is nonempty according to
+  available artifact metadata.
+- Require exactly one candidate per case. Logically quarantine and report
+  missing, duplicate, or conflicting candidates rather than guessing.
+- Do not traverse `applog`.
+
+Local inventory requirements:
+
+- Resolve exactly one immediate site directory ending in `_<site-id>`, such as
+  `Clinical Science Team - ASUI_122`.
+- Inventory canonical local case folders using the selected site prefix and
+  recognize `<case-id>\local.db` as the canonical local artifact.
+- Report missing or duplicate case-level databases separately, and report
+  noncanonical and local-only folders separately.
+- Do not download, copy, rename, or modify local files.
+- If the site directory is missing, print:
+
+  ```text
+  Site 122 is not available locally. Sync the site directory ending in _122 from the Clinical Science Team through the Teams app, then rerun.
+  ```
+
+Case-parity output must distinguish:
+
+- matched remote and local cases;
+- remote-only and local-only cases;
+- local cases with missing or duplicate `local.db` artifacts;
+- remote cases with missing or ambiguous session-level candidates;
+- duplicate or ambiguous case IDs; and
+- noncanonical folders excluded from canonical parity.
+
+Always print an actionable console summary. Optionally write sanitized JSON
+containing endpoint status, the resolved local path, counts, case-level
+differences, warnings, and failure reasons. Console and JSON results must agree.
+Exit `0` for complete canonical parity, `1` when both endpoints exist but
+differences remain, and `2` for configuration, access, missing-site, or
+root-ambiguity failures.
+
+The command must never print or serialize passwords, Sync URLs, signed tokens,
+or decryption keys. It must never download, extract, stage, acquire, or inspect
+the contents of remote `local.db` files; it only inventories already-available
+remote and local artifacts. Preserve the existing acquisition and `applog`
+workflows unchanged.
+
+**Completion criteria:** Tests cover reachable and missing Sync sites,
+authentication failure, both/neither recognized roots, missing or ambiguous
+local site directories, parity differences, missing/duplicate databases,
+noncanonical folders, and sanitized reporting. A live read-only site-122 check
+identifies its configured Sync share and
+`Clinical Science Team - ASUI_122`; a simulated missing-local-site check prints
+the Teams synchronization guidance; console and JSON results agree; and no
+remote or local artifact is downloaded, copied, staged, extracted, or modified.
+
+Completion evidence:
+
+- Added `scripts\check_site_availability.py` and the isolated
+  `site_availability.py` implementation with the requested defaults, overrides,
+  sanitized JSON option, and exit-code contract.
+- Remote inventory accepts exactly one `TDC Sessions` or `TDC Data` root,
+  matches exact canonical case folders, never traverses `applog`, and uses only
+  immediate-folder listing plus direct `local.db` size metadata. The code has no
+  acquisition, ZIP, SQLite, hashing, staging, or source-write path.
+- Local inventory resolves exactly one immediate `_<site-id>` directory,
+  classifies canonical case-level databases, preserves complete folder
+  accounting, and reports noncanonical folders separately without modifying the
+  Teams-synced tree.
+- Focused regression: `18 passed`, covering reachable/missing endpoints,
+  authentication, both/neither roots, local-site ambiguity, parity differences,
+  missing/duplicate/empty databases, duplicate case IDs, noncanonical folders,
+  sanitization, console/JSON agreement, exact Teams guidance, and no mutation.
+- Live read-only site-122 acceptance returned exit `0`: remote root
+  `TDC Sessions`, `19` remote canonical cases, `19` local canonical cases,
+  `19` complete matches, and no case/artifact issues. One remote and two local
+  noncanonical folders were reported and excluded as designed.
+- Full repository suite: `171 passed`. CLI help and Python compilation pass.
+
+## 6. Create a durable analytical database
 
 **Rationale:** Parsing every source database for every report is slow and makes
 historical comparison harder. A separate analytical store would make ingestion
@@ -309,7 +417,7 @@ queryable; idempotency and historical-version tests pass; SQL exports reproduce
 validated reference outputs; and clinical-derived database files are excluded
 from Git.
 
-## 6. Profile and optimize the pipeline
+## 7. Profile and optimize the pipeline
 
 **Rationale:** The reconciled profiler now accounts for total wall time, but
 controlled follow-up measurements are needed before choosing optimizations.

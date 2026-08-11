@@ -147,6 +147,34 @@ published layout is intentionally compact:
 For ASUI_122, omitting `--case-list` uses the built-in nine-case allowlist. The
 existing ASUI roll-up can be supplied with `--rollup` for reconciliation.
 
+### Read-Only Site Availability and Case Parity
+
+Before acquiring or analyzing a new site, check its configured Sync.com share
+and Teams-synced local directory using only the three-digit site ID:
+
+```powershell
+Set-Location "C:\Users\NicholasSisco\Documents\GitHub\Site_timing_analysis"
+
+$site = "122"
+& .\.venv\Scripts\python.exe .\scripts\check_site_availability.py --site $site
+$LASTEXITCODE
+```
+
+The defaults are `tools\profoundtools\sites.json` for the ignored Sync registry
+and `%USERPROFILE%\Profound Medical` for the local parent. Use `--sites-file` or
+`--local-root` only when those locations differ. Add, for example,
+`--report-json ".\outputs\availability\site_${site}.json"` for a sanitized
+machine-readable report outside the Teams-synced tree.
+
+The checker accepts exactly one remote root named `TDC Sessions` or `TDC Data`,
+matches exact `<case-id> TDC Sessions` folders, skips `applog`, and inventories
+only immediate timestamped session children and direct nonempty `local.db`
+metadata. Locally, it resolves one immediate site directory ending in the site
+ID and inventories canonical `<case-id>\local.db` paths. It never downloads,
+extracts, stages, opens, hashes, copies, or modifies a database. Exit `0` means
+complete canonical parity, `1` means both endpoints exist but differences
+remain, and `2` means configuration, access, local-site, or remote-root failure.
+
 ### Single-Case Commercial `local.db` Acquisition Test
 
 This isolated test retrieves one `local.db` from one explicitly selected case.
