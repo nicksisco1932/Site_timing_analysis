@@ -195,10 +195,13 @@ approved.
   `TDC Sessions`, `19` remote canonical cases, `19` local canonical cases, and
   `19` complete matches. The checker reported one remote and two local
   noncanonical folders separately and performed no acquisition or report write.
-- Durable-store focused regression: `13 passed`, covering schema/checksum
+- Durable-store focused regression: `15 passed`, covering schema/checksum
   reopening, complete and partial imports, raw payload round-trip, exact export
   formatting, idempotency, historical versioning, hard conflicts, invalid
   artifacts, atomic rollback, and destination rejection.
+- Full repository suite after TODO #6 phase 1: `186 passed` in `67.46s`.
+  All four store subcommand help checks pass, `pip check` reports no broken
+  requirements, and `git diff --check` reports no whitespace errors.
 - Live ASUI store acceptance imported 9 run cases, 1,226 canonical events,
   1,226 detailed intervals, and 45 reconciliation rows. A second identical
   import inserted zero analyses/events/intervals. SQLite integrity is `ok`,

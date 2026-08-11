@@ -425,6 +425,8 @@ Phase 1 completion evidence:
 - Synthetic store regression covers complete and partial runs, raw payload
   round-trip, exact export formatting, idempotency, historical versions,
   conflicts, invalid artifacts, rollback, and destination safety.
+- Validation completed with `15` focused store tests and `186` passing tests in
+  the full repository suite; CLI help, `pip check`, and `git diff --check` pass.
 - Live ASUI import stored 9 run cases, 1,226 canonical events, 1,226 detailed
   intervals, and 45 reconciliation rows. An identical second import added zero
   records. SQLite integrity, foreign keys, and all nine source hash/size/mtime

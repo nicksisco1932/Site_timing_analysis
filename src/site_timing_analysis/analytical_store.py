@@ -32,6 +32,7 @@ import hashlib
 import importlib.metadata
 import io
 import json
+import logging
 import math
 from pathlib import Path
 import sqlite3
@@ -43,6 +44,7 @@ from .timing_gantt_deliverables import PHASE_ORDER, PHASE_STATE_MAP
 
 SCHEMA_VERSION = 1
 STORE_NAME = "timeline_analysis"
+LOGGER = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REQUESTED_STATES = (
     "TULSA QA",
@@ -386,6 +388,8 @@ def _schema_sql() -> str:
             case_pk INTEGER NOT NULL REFERENCES cases(case_pk),
             source_artifact_id INTEGER NOT NULL REFERENCES source_artifacts(source_artifact_id),
             observed_path TEXT NOT NULL,
+            observed_source_type TEXT NOT NULL,
+            observed_archive_member TEXT NOT NULL,
             observed_size_bytes INTEGER NOT NULL,
             observed_mtime_ns INTEGER NOT NULL,
             observed_at_utc TEXT NOT NULL,
@@ -453,6 +457,7 @@ def _schema_sql() -> str:
             difference_minutes REAL,
             status TEXT NOT NULL,
             failure_type TEXT NOT NULL,
+            details_json TEXT NOT NULL,
             PRIMARY KEY (run_id, case_pk, phase)
         );
 
@@ -549,9 +554,28 @@ def _open_database(path: Path, *, read_only: bool = False) -> sqlite3.Connection
     return connection
 
 
+def _verify_schema(connection: sqlite3.Connection) -> None:
+    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if version != SCHEMA_VERSION:
+        raise AnalyticalStoreError(
+            f"Unsupported analytical schema version {version}; expected {SCHEMA_VERSION}."
+        )
+    row = connection.execute(
+        "SELECT checksum_sha256 FROM schema_migrations WHERE version = ?",
+        (SCHEMA_VERSION,),
+    ).fetchone()
+    if row is None or row["checksum_sha256"] != _migration_checksum():
+        raise AnalyticalStoreError(
+            "Schema migration checksum does not match this application version."
+        )
+    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise AnalyticalStoreError("SQLite foreign-key enforcement is not enabled.")
+
+
 def initialize_database(database: Path) -> Path:
     """Create schema v1 or verify an existing compatible database."""
     target = validate_database_path(database)
+    LOGGER.info("Initializing or verifying analytical store: %s", target)
     target.parent.mkdir(parents=True, exist_ok=True)
     existed = target.exists()
     connection = _open_database(target)
@@ -574,25 +598,15 @@ def initialize_database(database: Path) -> Path:
                 if connection.in_transaction:
                     connection.rollback()
                 raise
-        elif version == SCHEMA_VERSION:
-            row = connection.execute(
-                "SELECT checksum_sha256 FROM schema_migrations WHERE version = ?",
-                (SCHEMA_VERSION,),
-            ).fetchone()
-            if row is None or row["checksum_sha256"] != _migration_checksum():
-                raise AnalyticalStoreError(
-                    "Schema migration checksum does not match this application version."
-                )
         elif version == 0 and existed:
             raise AnalyticalStoreError(
                 f"Existing file is not an initialized {STORE_NAME} database: {target}"
             )
-        else:
+        elif version != SCHEMA_VERSION:
             raise AnalyticalStoreError(
                 f"Unsupported analytical schema version {version}; expected {SCHEMA_VERSION}."
             )
-        if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
-            raise AnalyticalStoreError("SQLite foreign-key enforcement is not enabled.")
+        _verify_schema(connection)
     finally:
         connection.close()
     return target
@@ -661,6 +675,19 @@ def _parse_iso(value: str, *, context: str) -> datetime:
 def _optional_int(value: str | None) -> int | None:
     text = "" if value is None else str(value).strip()
     return None if not text else int(text)
+
+
+def _optional_float(value: str | None, *, context: str) -> float | None:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = float(text)
+    except ValueError as exc:
+        raise AnalyticalStoreError(f"Invalid numeric value for {context}: {value!r}") from exc
+    if not math.isfinite(parsed):
+        raise AnalyticalStoreError(f"Non-finite numeric value for {context}: {value!r}")
+    return parsed
 
 
 def _bool_value(value: str, *, context: str) -> int:
@@ -742,6 +769,39 @@ def _validate_phase_configuration() -> None:
         )
 
 
+def _case_validation_rows(
+    execution_case: dict[str, Any], failures: list[Any]
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for name in (
+        "pipeline_status",
+        "event_status",
+        "interval_status",
+        "assigned_database_status",
+        "identity_status",
+    ):
+        status = str(execution_case.get(name, ""))
+        details: dict[str, Any] = {"recorded_status": status}
+        if name == "pipeline_status":
+            details.update(
+                {
+                    "failure_reason": str(execution_case.get("failure_reason", "")),
+                    "failures": failures,
+                }
+            )
+        if name == "identity_status":
+            details["identity_reason"] = str(execution_case.get("identity_reason", ""))
+        rows.append(
+            {
+                "check_name": name,
+                "status": status,
+                "failure_type": "" if status == "PASS" else name,
+                "details_json": _canonical_json(details),
+            }
+        )
+    return rows
+
+
 def _validate_case_artifacts(
     *,
     case_id: str,
@@ -801,7 +861,11 @@ def _validate_case_artifacts(
             totals[state] += duration_sec / 60.0
         _validate_raw_json(row.get("raw_payload_json", "{}"), context=f"{case_id} interval")
     for ordinal, row in enumerate(events, start=1):
-        _parse_iso(row["timestamp"], context=f"{case_id} event row {ordinal}")
+        timestamp = _parse_iso(row["timestamp"], context=f"{case_id} event row {ordinal}")
+        if timestamp < start or timestamp > end:
+            raise AnalyticalStoreError(
+                f"Canonical event outside valid event window for {case_id} row {ordinal}."
+            )
         _validate_raw_json(row.get("raw_payload_json", "{}"), context=f"{case_id} event")
 
     if wide_row.get("Site") != site_code or wide_row.get("PtId") != case_id:
@@ -841,6 +905,7 @@ def prepare_run_import(
     parser_version: ParserVersion | None = None,
 ) -> PreparedRun:
     """Validate a published run completely before any store transaction."""
+    LOGGER.info("Validating Timeline Analysis run artifacts: %s", run_dir)
     _validate_phase_configuration()
     run_root = run_dir.expanduser().resolve()
     if not run_root.is_dir():
@@ -1051,21 +1116,7 @@ def prepare_run_import(
                 events=events,
                 intervals=intervals,
                 wide_snapshot=wide_row,
-                validation_rows=[
-                    {
-                        "check_name": name,
-                        "status": str(execution_case.get(name, "")),
-                        "failure_type": "" if execution_case.get(name) == "PASS" else name,
-                        "details_json": "{}",
-                    }
-                    for name in (
-                        "pipeline_status",
-                        "event_status",
-                        "interval_status",
-                        "assigned_database_status",
-                        "identity_status",
-                    )
-                ],
+                validation_rows=_case_validation_rows(execution_case, failures),
             )
         )
 
@@ -1089,6 +1140,41 @@ def prepare_run_import(
         raise AnalyticalStoreError(
             "Reconciliation artifact must contain exactly one row per selected case and phase."
         )
+    prepared_by_case = {case.case_id: case for case in cases}
+    for row in reconciliation_rows:
+        case = prepared_by_case[row["case_id"]]
+        phase = row["phase"]
+        detailed = _optional_float(
+            row["detailed_minutes_unrounded"],
+            context=f"{case.case_id}/{phase} detailed reconciliation",
+        )
+        rollup = _optional_float(
+            row["rollup_minutes"], context=f"{case.case_id}/{phase} rollup reconciliation"
+        )
+        difference = _optional_float(
+            row["difference_minutes"],
+            context=f"{case.case_id}/{phase} reconciliation difference",
+        )
+        if case.final_row_included:
+            expected_detailed = sum(
+                float(interval["duration_sec"]) / 60.0
+                for interval in case.intervals or []
+                if interval.get("state", "") in PHASE_STATE_MAP[phase]
+            )
+            if detailed is None or abs(detailed - expected_detailed) > 1e-8:
+                raise AnalyticalStoreError(
+                    f"Detailed reconciliation total differs from intervals for {case.case_id}/{phase}."
+                )
+        if detailed is not None and rollup is not None:
+            expected_difference = detailed - rollup
+            if difference is None or abs(difference - expected_difference) > 1e-8:
+                raise AnalyticalStoreError(
+                    f"Reconciliation difference is inconsistent for {case.case_id}/{phase}."
+                )
+            if row["status"] == "PASS" and abs(difference) > 0.1 + 1e-9:
+                raise AnalyticalStoreError(
+                    f"Passing reconciliation exceeds tolerance for {case.case_id}/{phase}."
+                )
 
     configuration = {
         "schema_version": 1,
@@ -1280,6 +1366,7 @@ def _insert_intervals(
 def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
     """Persist one prevalidated run atomically with content-addressed reuse."""
     target = validate_database_path(database, run_dir=Path(prepared.run_dir))
+    LOGGER.info("Importing validated run %s into %s", prepared.run_id, target)
     if not target.is_file():
         raise AnalyticalStoreError(
             f"Analytical database is not initialized: {target}. Run the init command first."
@@ -1287,11 +1374,7 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
     connection = _open_database(target)
     inserted_analyses = reused_analyses = inserted_events = inserted_intervals = 0
     try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version != SCHEMA_VERSION:
-            raise AnalyticalStoreError(
-                f"Unsupported analytical schema version {version}; expected {SCHEMA_VERSION}."
-            )
+        _verify_schema(connection)
         existing = connection.execute(
             "SELECT import_fingerprint_sha256 FROM analysis_runs WHERE run_id = ?",
             (prepared.run_id,),
@@ -1451,14 +1534,17 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                     """
                     INSERT INTO source_observations (
                         run_id, case_pk, source_artifact_id, observed_path,
+                        observed_source_type, observed_archive_member,
                         observed_size_bytes, observed_mtime_ns, observed_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         prepared.run_id,
                         case_pk,
                         source_artifact_id,
                         case.source_path,
+                        case.source_type,
+                        case.source_archive_member,
                         case.source_size_bytes,
                         case.source_mtime_ns,
                         _utc_now(),
@@ -1536,8 +1622,9 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                 """
                 INSERT INTO reconciliation_results (
                     run_id, case_pk, phase, detailed_minutes_unrounded,
-                    rollup_minutes, difference_minutes, status, failure_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    rollup_minutes, difference_minutes, status, failure_type,
+                    details_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     prepared.run_id,
@@ -1550,6 +1637,12 @@ def import_prepared_run(database: Path, prepared: PreparedRun) -> ImportSummary:
                     float(row["difference_minutes"]) if row["difference_minutes"] else None,
                     row["status"],
                     row["failure_type"],
+                    _canonical_json(
+                        {
+                            "comparison_source": "imported_phase_reconciliation_artifact",
+                            "detailed_intervals_are_authoritative": True,
+                        }
+                    ),
                 ),
             )
         connection.commit()
@@ -1611,10 +1704,12 @@ def _csv_text(rows: list[dict[str, str]]) -> str:
 def export_wide(database: Path, run_id: str, output: Path) -> dict[str, Any]:
     """Export the public 20-column CSV from SQL interval aggregates."""
     target = validate_database_path(database)
+    LOGGER.info("Exporting SQL-backed wide result for run %s", run_id)
     if not target.is_file():
         raise AnalyticalStoreError(f"Analytical database is missing: {target}")
     connection = _open_database(target, read_only=True)
     try:
+        _verify_schema(connection)
         run = connection.execute(
             "SELECT run_id, site_code, run_status FROM analysis_runs WHERE run_id = ?",
             (run_id,),
@@ -1670,6 +1765,7 @@ def list_runs(database: Path) -> list[dict[str, Any]]:
         raise AnalyticalStoreError(f"Analytical database is missing: {target}")
     connection = _open_database(target, read_only=True)
     try:
+        _verify_schema(connection)
         return [dict(row) for row in connection.execute(
             """
             SELECT ar.run_id, ar.site_code, ar.run_status, ar.started_at_utc,
@@ -1719,6 +1815,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = build_parser().parse_args(argv)
     try:
         if args.command == "init":

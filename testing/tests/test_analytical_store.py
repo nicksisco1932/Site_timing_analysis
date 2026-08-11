@@ -367,6 +367,11 @@ def test_initialization_is_versioned_transactional_and_reopenable(tmp_path: Path
         assert tuple(migration[:2]) == (1, "initial_timeline_store")
         assert migration["checksum_sha256"] == analytical_store._migration_checksum()
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        connection.execute(
+            "UPDATE schema_migrations SET checksum_sha256 = 'INVALID' WHERE version = 1"
+        )
+    with pytest.raises(AnalyticalStoreError, match="checksum"):
+        initialize_database(database)
 
 
 def test_complete_import_export_raw_payload_and_idempotency(tmp_path: Path) -> None:
@@ -399,6 +404,10 @@ def test_complete_import_export_raw_payload_and_idempotency(tmp_path: Path) -> N
             "negative_rebased_start",
             "negative_rebased_start_expected_pre_anchor",
         ]
+        reconciliation_details = connection.execute(
+            "SELECT details_json FROM reconciliation_results LIMIT 1"
+        ).fetchone()[0]
+        assert json.loads(reconciliation_details)["detailed_intervals_are_authoritative"] is True
 
     output = tmp_path / "exports" / "wide.csv"
     result = export_wide(database, "run-001", output)
@@ -506,12 +515,38 @@ def test_same_run_id_with_changed_content_is_a_hard_conflict(tmp_path: Path) -> 
         ),
         (
             lambda run: _replace_csv_value(
+                run / "Backend" / "events" / "state_labeled" / "001_01-001_state_labeled_events.csv",
+                EVENT_FIELDS,
+                "timestamp",
+                "2025-12-31T23:59:59",
+            ),
+            "Canonical event outside valid event window",
+        ),
+        (
+            lambda run: _replace_csv_value(
                 run / "Report" / "test_001_timeline_analysis.csv",
                 WIDE_HEADERS,
                 "TULSA QA",
                 "9.9",
             ),
             "Wide interval-derived value mismatch",
+        ),
+        (
+            lambda run: _replace_csv_value(
+                run / "Backend" / "reports" / "phase_reconciliation.csv",
+                (
+                    "case_id",
+                    "phase",
+                    "detailed_minutes_unrounded",
+                    "rollup_minutes",
+                    "difference_minutes",
+                    "status",
+                    "failure_type",
+                ),
+                "detailed_minutes_unrounded",
+                "999.0",
+            ),
+            "Detailed reconciliation total differs from intervals",
         ),
     ],
 )
