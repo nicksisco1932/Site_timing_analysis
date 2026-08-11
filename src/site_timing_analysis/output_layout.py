@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/output_layout.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-06-11
+# Purpose: Defines the canonical output-folder layout for staged timing-analysis runs.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 from dataclasses import dataclass

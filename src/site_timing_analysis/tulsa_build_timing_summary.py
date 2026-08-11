@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_build_timing_summary.py  (v0.2)
 ------------------------------------
@@ -15,6 +14,19 @@ Output:
 Author:
     N. J. Sisco
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_build_timing_summary.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA build timing summary workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from pathlib import Path

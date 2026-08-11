@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Shape of sites.json, which is NOT committed -- a sync.com link URL embeds",
+    "the share's decryption key.",
+    "",
+    "Transcribe from the Commercial Data Landing Page: its Quick links web part",
+    "gives one link per site, and the table beside it gives short_name, clinic",
+    "and the 'Data Available for AI' column. 'status' mirrors the caveats the",
+    "page calls out in prose ('Data for Complaints Only', etc.) -- the planner",
+    "uses it to treat an absent 'TDC Data' folder as expected rather than an error.",
+    "",
+    "Three link shapes appear on the page and all are accepted:",
+    "  https://lnN.sync.com/dl/<id>/<key>",
+    "  https://lnN.sync.com/dl/<id>#<key>",
+    "  https://lnN.sync.com/4.0/dl/<id>#<key>",
+    "",
+    "A site whose landing-page link is not a sync.com share (e.g. 004, which",
+    "points at SharePoint) should have an empty url; it is then skipped.",
+    "",
+    "The password is NEVER stored here. Run `sync-tdc-logs setup`."
+  ],
+  "sites": {
+    "007": {
+      "short_name": "SHH",
+      "clinic": "Sapporo Hokuyu Hospital",
+      "data_for_ai": "No",
+      "url": "https://ln5.sync.com/dl/EXAMPLE00/aaaaaaaa-bbbbbbbb-cccccccc-dddddddd"
+    },
+    "059": {
+      "short_name": "Isala",
+      "clinic": "Isala Hospital",
+      "data_for_ai": "No",
+      "url": "https://ln5.sync.com/dl/EXAMPLE01/aaaaaaaa-bbbbbbbb-cccccccc-dddddddd",
+      "status": "Site Created, No Data Received"
+    },
+    "004": {
+      "short_name": "JH",
+      "clinic": "Johns Hopkins",
+      "data_for_ai": "No",
+      "url": "",
+      "status": "Site Created but no Commercial Data Received (landing-page link is not a sync.com share)"
+    }
+  }
+}

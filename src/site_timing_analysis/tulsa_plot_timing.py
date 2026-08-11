@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_plot_timing.py
 
@@ -16,6 +15,19 @@ Generate:
 
 Outputs PNGs into --outdir.
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_plot_timing.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA plot timing workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from dataclasses import dataclass

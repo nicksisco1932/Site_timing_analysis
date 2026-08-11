@@ -1,5 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# Project: Site Timing Analysis
+# File: testing/sanity_states_by_pt.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Provides a development/testing utility for sanity states by pt analysis.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from pathlib import Path

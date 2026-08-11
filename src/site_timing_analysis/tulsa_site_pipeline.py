@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_site_pipeline.py  (v0.1)
 
@@ -34,6 +33,19 @@ Key files:
     plots/
     stats/    (from tulsa_trend_analysis.py)
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_site_pipeline.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA site pipeline workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 from __future__ import annotations
 

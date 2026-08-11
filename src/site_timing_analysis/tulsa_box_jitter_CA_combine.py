@@ -11,6 +11,18 @@ Example:
         --basename "timing_boxjitter"
 """
 
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_box_jitter_CA_combine.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA box jitter CA combine workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 import os
 import argparse
 

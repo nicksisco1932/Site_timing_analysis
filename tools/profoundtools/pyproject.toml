@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "sync-tdc-logs"
+version = "0.1.0"
+description = "Mirror missing TDC application logs from the per-site password-protected sync.com share links into the local AppLogs archive."
+authors = ["John Milasch <jmilasch@profoundmedical.com>"]
+readme = "README.md"
+packages = [{ include = "sync_tdc_logs" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+requests = "^2.31"
+cryptography = "^43.0"
+keyring = "^25.7.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+
+[tool.poetry.scripts]
+sync-tdc-logs = "sync_tdc_logs.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

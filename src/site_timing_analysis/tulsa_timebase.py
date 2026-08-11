@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_timebase.py  (v0.1)
 -------------------------
@@ -20,6 +19,19 @@ These helpers are intended to be imported by:
     - tulsa_time_sanity.py
     - any future scripts that need clean datetime handling.
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_timebase.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA timebase workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 from __future__ import annotations
 

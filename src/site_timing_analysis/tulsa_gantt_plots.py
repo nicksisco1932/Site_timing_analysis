@@ -1,17 +1,32 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_gantt_plots.py
 
 Create Gantt-style horizontal stacked bar plots from timing_summary CSVs.
 """
 
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_gantt_plots.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA gantt plots workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
+
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

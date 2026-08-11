@@ -10,6 +10,21 @@
 #############################################################################
 #############################################################################
 
+# Project: Site Timing Analysis
+# File: Legacy/r_reference/ReadAuditLogs.R
+# Original author: Robert Staruch (per existing file banner)
+# Material modifications: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2019-07-26 (per existing file banner)
+# Repository added: 2026-03-03
+# Purpose: Legacy R reference workflow for reconstructing TULSA treatment timing states.
+#
+# Provenance: Legacy R implementation with later material modifications by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
+
 
 #### CHANGE LOG #############
 #' 20240610 NJS

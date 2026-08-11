@@ -246,6 +246,72 @@ Any significant logic introduced by an agent must include:
 - Assumptions
 - Known limitations
 
+## Standing Order: Source Authorship and Provenance Headers
+
+Source-file provenance is a repository governance requirement. This repository
+contains code developed by Nicholas J. Sisco, Ph.D. in the course of work for
+Profound Medical, LLC. Headers should preserve human authorship and
+implementation provenance while accurately reflecting the company-owned /
+proprietary context.
+
+- New source files must include a concise, language-appropriate provenance
+  header.
+- Existing source headers must be preserved.
+- Agents must not remove, weaken, anonymize, or overwrite provenance,
+  authorship, copyright, license, or proprietary notices.
+- When Nicholas J. Sisco, Ph.D. authored or materially implemented a source
+  file, the header must identify Nicholas J. Sisco, Ph.D. as the primary author
+  or implementer.
+- Headers must identify Profound Medical, LLC as the rights holder /
+  proprietary context, not Nicholas J. Sisco personally.
+- Do not make unsupported legal ownership claims.
+- Do not add headers to generated artifacts, logs, exported data,
+  DICOM-derived outputs, archives, binary files, build outputs, cache files, or
+  vendored third-party dependencies.
+- Third-party notices must be retained exactly as found.
+- If third-party or pre-existing code is modified, add a modification note
+  rather than replacing the original notice.
+- Before completing any coding task, agents should check whether newly created
+  or materially modified source files contain the required header.
+- AI tools are not to be listed as authors in source headers. AI assistance may
+  be mentioned in commit messages or implementation notes if useful, but file
+  headers should identify the responsible human author/maintainer and
+  organizational context.
+
+Preferred default header template for Python files:
+
+```python
+# Project: Site Timing Analysis
+# File: <RELATIVE_FILE_PATH>
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: <YYYY-MM-DD or Unknown>
+# Purpose: <ONE-SENTENCE PURPOSE>
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
+```
+
+Preferred generic comment template:
+
+```text
+Project: Site Timing Analysis
+File: <RELATIVE_FILE_PATH>
+Primary author: Nicholas J. Sisco, Ph.D.
+Organization: Profound Medical, LLC
+Created: <YYYY-MM-DD or Unknown>
+Purpose: <ONE-SENTENCE PURPOSE>
+
+Provenance: Original implementation or material contribution by
+Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+
+Rights status: Proprietary / internal use unless otherwise specified
+by Profound Medical, LLC.
+```
+
 ## When the Agent Must Stop
 
 Agents must stop and ask for guidance when:

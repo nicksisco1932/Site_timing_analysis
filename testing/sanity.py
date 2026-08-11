@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: testing/sanity.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Provides a development/testing utility for sanity analysis.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 import pandas as pd
 from pathlib import Path
 

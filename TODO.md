@@ -1,0 +1,257 @@
+# TODO
+
+## Current checkpoint
+
+- Before the 2026-08-11 local checkpoint, `feature/workflow-analytics` matched
+  `origin/feature/workflow-analytics` at `92f6ec9`; no pull entry was present in
+  the available reflog, so that commit remains the reviewed comparison baseline.
+- GitHub housekeeping for the current Timeline Analysis slice was completed on
+  2026-08-10. The reviewed scope and reviewer-ready narrative are recorded in
+  `docs/PULL_REQUEST_SUMMARY.md`.
+- Clinical-derived SQLite fixtures, generated validation outputs, profiling
+  runs, caches, and committed bytecode were removed. Integration tests now
+  generate a deterministic non-clinical SQLite fixture at runtime.
+
+## 1. Complete standard GitHub housekeeping — Completed 2026-08-10
+
+**Rationale:** The recent Timeline Analysis work is broad and uncommitted. It
+needs a deliberate scope, data-governance, and reviewer-readiness pass before it
+is published.
+
+Completion evidence:
+
+- Reviewed branch/upstream state, recent commits, and the complete diff from
+  upstream baseline `92f6ec9`; the intended functional, documentation,
+  provenance, test, and cleanup changes are classified in the reviewer summary.
+- Removed temporary profiling runs, generated test files, two duplicate tracked
+  SQLite fixtures, nine tracked validation outputs, and committed Python
+  bytecode. No untracked database, workbook, CSV, JSON, image, or PDF is exposed
+  for staging.
+- Replaced the database fixture with `testing/synthetic_test_db.py`, which
+  generates deterministic non-clinical input in disposable test directories.
+- Full suite: `114 passed`, zero failures and warnings. The synthetic database
+  regression reports `3 passed`.
+- Help checks pass for `site_timing_analysis.first_slice_cli`,
+  `scripts/run_timeline_analysis.py`, and
+  `scripts/build_timing_gantt_deliverables.py`.
+- `pip check` reports no broken requirements; `git diff --check` reports no
+  whitespace errors.
+- Updated `README.md`, `ARCHITECTURE.md`, `SESSION.md`, `CHANGELOG.md`, and
+  supporting documentation. `docs/PULL_REQUEST_SUMMARY.md` explains scope,
+  rationale, contracts, validation, limitations, and follow-up work for a new
+  reviewer.
+- The existing 2026.03.19 ASUI roll-up remains unchanged at SHA-256
+  `81E3C37C1F05A3999974D381DE71DF32C28FC4F63B630DEA1DE9EC79EC64B546`.
+  Existing run-integrity records and live metadata comparisons show zero source
+  database changes across 9 ASUI and 148 Stanford ingested cases.
+
+## 2. Test single-case `local.db` acquisition — Completed 2026-08-11
+
+**Status:** Completed. The isolated one-case CLI now follows the verified live
+hierarchy, uses the repository-local ProfoundTools transport, preserves the
+existing `applog` workflow, and has passed a real site-122 acquisition.
+
+**Rationale:** Prove the authenticated, read-only acquisition path with the
+smallest possible scope before testing multiple cases or designing bulk
+behavior.
+
+Create a minimal end-to-end test that:
+
+- connects to the relevant commercial Sync.com share;
+- requires one explicitly supplied site and case ID;
+- locates the exact case folder named `<case-id> TDC Sessions`;
+- finds and retrieves that case's `local.db`;
+- validates that the result is a readable SQLite database containing the
+  required tables;
+- saves it to a configurable temporary or test destination; and
+- reports its identity, basic schema, and exact saved path for manual
+inspection.
+
+Verified live hierarchy, with the site-level container shown explicitly:
+
+```text
+Link for Site - <site>
++-- TDC Sessions
+    +-- <case-id> TDC Sessions
+        +-- <timestamped session folder>
+        |   +-- local.db
+        |   +-- <session-export>.zip
+        |   +-- Raw.zip
+        +-- applog
+```
+
+Required traversal and selection behavior:
+
+- Match the exact case folder named `<case-id> TDC Sessions`.
+- Treat `applog` as unrelated to `local.db` acquisition and leave the existing
+  `applog` workflow unchanged.
+- Inspect the timestamped session-folder children beneath the case folder.
+- Select a valid session folder containing a direct child named `local.db`,
+  case-insensitively.
+- Require an unambiguous match. Quarantine missing, multiple, or conflicting
+  candidates rather than guessing.
+- Inspect a session-export ZIP only when the direct `local.db` is absent.
+- Validate the selected SQLite database before copying it.
+- Save a successful result as `<destination>\<case-id>\local.db`, matching the
+  Timeline Analysis/PEDA input structure.
+
+The test must keep the source database read-only, preserve the existing
+`applog` workflow unchanged, and quarantine missing, ambiguous, or invalid
+sources rather than guessing. The destination will be supplied when the test
+is run.
+
+**Completion criteria:** One explicitly selected case is downloaded
+successfully through the verified hierarchy; its `local.db` opens and passes
+basic schema validation; its identity and exact local path are printed for
+manual inspection; and every missing, ambiguous, multiple, conflicting, or
+invalid condition produces a clear failure or quarantine reason.
+
+Completion evidence:
+
+- Acquired explicit site/case `122` / `122_01-001` through
+  `TDC Sessions/122_01-001 TDC Sessions/`
+  `_2025-03-24--10-01-59 105064141/local.db` using listing and download-only
+  transport operations.
+- Published the validated database at
+  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_acquisition_test\`
+  `2026-08-11_site122_case001\122_01-001\local.db` and printed that exact path.
+- Saved the machine-readable result at the adjacent
+  `_reports\122_01-001_single_case_acquisition.json` path.
+- Verified `11,608,064` bytes and SHA-256
+  `BBB5044A982075FDF31E60B14EEA93A0DDB1CDE04D8DC1716B788A13D24DCD99`;
+  report path, size, and digest all match the published file.
+- Opened SQLite independently with `mode=ro&immutable=1`; integrity is `ok`,
+  required tables are present, row counts are `271` AuditLogRecords, `1`
+  Session, and `2` Treatments, with zero treatment/session relationship
+  orphans.
+- Confirmed no staging or quarantine files remain and no Sync URL, password,
+  signed-download token, or signature marker appears in the JSON report.
+- Re-listed the selected remote folder after acquisition; the same four source
+  files and `11.1 MB` `local.db` remain present. `applog` was not traversed.
+- Focused acquisition regression: `16 passed`. Full repository suite:
+  `130 passed`. CLI help, `pip check`, and `git diff --check` pass.
+
+## 3. Validate acquisition with at least five cases
+
+**Depends on:** Successful completion of TODO #2.
+
+**Rationale:** A multi-case test is needed to expose real differences in remote
+folder structure, naming, identity, and database packaging before bulk use.
+
+Extend the single-case test to acquire at least five explicitly selected cases
+and review:
+
+- incorrect or ambiguous session-folder matching;
+- missing or multiple `local.db` candidates;
+- download or extraction failures;
+- SQLite integrity or schema problems;
+- case-identity mismatches;
+- duplicate or incorrectly named destination files; and
+- structural differences between cases.
+
+Do not proceed to bulk acquisition while any five-case issue remains
+unresolved. Keep all source data read-only.
+
+**Completion criteria:** At least five requested cases are acquired; every case
+maps to exactly one valid `local.db`; files use the expected case-specific
+directory structure; machine-readable and human-readable summaries classify
+success, failure, quarantine, and reasons; and no source data is modified.
+
+## 4. Add scalable bulk `local.db` acquisition
+
+**Depends on:** Successful completion of TODO #3.
+
+**Rationale:** Once representative cases establish safe matching and
+validation rules, provide a resumable command that eliminates manual
+case-by-case web downloads while producing inputs Timeline Analysis already
+understands.
+
+Create a reusable command that acquires `local.db` files for explicitly
+supplied site and case selections. The destination root will be supplied after
+the single-case and five-case tests are complete. The command must:
+
+- require explicit site and case selection;
+- match each case to the exact `<case-id> TDC Sessions` folder and exactly one
+  valid timestamped session-folder child;
+- prefer that timestamped folder's direct child named `local.db`,
+  case-insensitively;
+- optionally inspect that timestamped folder's session-export ZIP when no
+  direct database exists;
+- quarantine missing, ambiguous, invalid, or conflicting candidates;
+- validate SQLite integrity, required tables, case identity, file size, and
+  SHA-256;
+- maintain a case-level acquisition inventory;
+- avoid silently overwriting an existing valid file;
+- be resumable and safe to rerun;
+- place files in the exact case-specific structure expected by Timeline
+  Analysis; and
+- preserve the existing `applog` behavior unchanged.
+
+**Completion criteria:** One documented command acquires a large explicitly
+requested case set; the expected Timeline Analysis directory structure is
+produced; a complete acquisition report and inventory are written; failures
+are isolated by case without guessed or fabricated files; reruns are safe; and
+the source share and databases remain read-only.
+
+## 5. Create a durable analytical database
+
+**Rationale:** Parsing every source database for every report is slow and makes
+historical comparison harder. A separate analytical store would make ingestion
+repeatable while preserving complete provenance and prior results.
+
+Design and implement a separate SQLite database for Timeline Analysis so cases
+are parsed once and timing results can be appended and queried historically.
+The design must preserve:
+
+- source case identity and provenance;
+- site and case ID;
+- source database path, modified time, and hash;
+- parser/version information;
+- analysis run metadata;
+- canonical enriched events;
+- detailed state intervals;
+- wide case-level timing results;
+- validation and reconciliation results;
+- timestamp provenance;
+- processing status and failure reasons.
+
+Requirements:
+
+- Keep source clinical databases read-only.
+- Make ingestion idempotent: rerunning the same case with the same source and
+  parser version must not silently duplicate records.
+- Preserve prior analysis runs when the parser or source data changes.
+- Treat detailed state intervals as the analytical source of truth.
+- Generate CSVs, reports, comparisons, and future dashboards from SQL views or
+  exports instead of repeatedly rereading every source database.
+- Define a practical migration and validation plan before implementation.
+- Keep the analytical database outside Git if it contains generated or
+  clinical-derived data.
+
+**Completion criteria:** An approved schema and migration plan exist; source,
+parser, case, run, event, interval, result, and validation provenance are
+queryable; idempotency and historical-version tests pass; SQL exports reproduce
+validated reference outputs; and clinical-derived database files are excluded
+from Git.
+
+## 6. Profile and optimize the pipeline
+
+**Rationale:** The reconciled profiler now accounts for total wall time, but
+controlled follow-up measurements are needed before choosing optimizations.
+
+- Continue measuring startup, preflight, discovery, database work, event/state
+  processing, artifact writes, plotting, validation, reporting, and shutdown.
+- Distinguish computation from database and filesystem I/O using wall time,
+  process CPU time, row/event counts, and output file/byte metrics.
+- Benchmark targeted changes on the same representative case manifest,
+  including plot suppression, reduced intermediate artifacts where contracts
+  safely permit it, local staging, and cached database resolution.
+- Preserve case selection, source-database handling, publication gates, detailed
+  interval truth, and public output contracts unless a change is separately
+  approved.
+
+**Completion criteria:** Nested timings reconcile to total wall time within the
+documented tolerance; repeated comparable benchmarks identify stage and case
+costs with percentages; every proposed optimization has measured before/after
+results and output-parity checks; and the final recommendation distinguishes
+CPU, database, and filesystem bottlenecks without committing generated outputs.

@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_state_machine.py
 
@@ -11,6 +10,19 @@ This version is aimed at timeline reconstruction for Gantt output:
 - state ordering aligned with the legacy end product
 - normalized start_sec rebased around the intra-MRI workflow anchor
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_state_machine.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA state machine workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 from __future__ import annotations
 

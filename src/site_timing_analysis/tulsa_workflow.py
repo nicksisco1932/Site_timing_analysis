@@ -3,6 +3,18 @@
 Shared workflow constants for the TULSA timing pipeline.
 """
 
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_workflow.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA workflow workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 

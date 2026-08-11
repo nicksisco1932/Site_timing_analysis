@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/config.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Builds and validates run configuration for the staged timing pipeline.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import argparse
@@ -51,6 +63,7 @@ def build_run_config(
     root_dir: str | Path,
     output_dir: str | Path,
     site_path: str | Path | None = None,
+    case_id_file: str | Path | None = None,
     allow_ambiguous_db: bool = False,
     db_candidate_index: int | None = None,
     zip_member_index: int | None = None,
@@ -77,6 +90,9 @@ def build_run_config(
         if site_path is not None
         else resolved_root / normalized_site
     )
+    resolved_case_id_file = (
+        Path(case_id_file).expanduser().resolve() if case_id_file is not None else None
+    )
     resolved_timing_log_dir = (
         Path(timing_log_dir).expanduser().resolve() if timing_log_dir is not None else None
     )
@@ -100,6 +116,7 @@ def build_run_config(
         root_dir=resolved_root,
         output_dir=resolved_output,
         site_path=resolved_site_path,
+        case_id_file=resolved_case_id_file,
         allow_ambiguous_db=allow_ambiguous_db,
         db_candidate_index=db_candidate_index,
         zip_member_index=zip_member_index,
@@ -119,6 +136,7 @@ def build_run_config_from_mapping(config_data: Mapping[str, Any]) -> RunConfig:
         root_dir=config_data["root_dir"],
         output_dir=config_data["output_dir"],
         site_path=config_data.get("site_path"),
+        case_id_file=config_data.get("case_id_file"),
         allow_ambiguous_db=bool(config_data.get("allow_ambiguous_db", False)),
         db_candidate_index=config_data.get("db_candidate_index"),
         zip_member_index=config_data.get("zip_member_index"),
@@ -147,6 +165,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--site-path",
         default=None,
         help="Optional explicit site folder path. Overrides <root>/<site>.",
+    )
+    parser.add_argument(
+        "--case-id-file",
+        default=None,
+        help="Optional newline-delimited case IDs. Discovery still runs first, then only these IDs are ingested.",
     )
     parser.add_argument(
         "--allow-ambiguous-db",
@@ -210,6 +233,7 @@ def build_run_config_from_args(argv: list[str] | None = None) -> RunConfig:
         root_dir=args.root,
         output_dir=args.output,
         site_path=args.site_path,
+        case_id_file=args.case_id_file,
         allow_ambiguous_db=args.allow_ambiguous_db,
         db_candidate_index=args.db_candidate_index,
         zip_member_index=args.zip_member_index,

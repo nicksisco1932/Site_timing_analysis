@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: testing/tests/test_test_data_pipeline.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Tests test data pipeline behavior for the Site Timing Analysis workflow.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import subprocess
@@ -5,6 +17,8 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+
+from testing.synthetic_test_db import SYNTHETIC_CASE_ID, create_synthetic_test_db
 
 
 def run_step(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -25,8 +39,8 @@ def run_step(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def run_testdata_pipeline(repo_root: Path, outdir: Path) -> dict[str, Path]:
     site = "TESTDATA"
-    db_path = repo_root / "testing" / "test_data" / "local.db"
     outdir.mkdir(parents=True, exist_ok=True)
+    db_path = create_synthetic_test_db(outdir / "fixture" / "local.db")
 
     run_step(
         repo_root,
@@ -145,7 +159,7 @@ def test_test_data_summary_matches_expected_shape(tmp_path: Path) -> None:
     sanity_df = pd.read_csv(outputs["sanity"])
 
     assert len(summary_df) == 1
-    assert summary_df.at[0, "PtId"] == "064_01-137"
+    assert summary_df.at[0, "PtId"] == SYNTHETIC_CASE_ID
     assert summary_df.at[0, "MRITotal"] > 0
     assert summary_df.at[0, "ProcedureTotal"] >= summary_df.at[0, "MRITotal"]
     assert summary_df.at[0, "Treating"] > 0

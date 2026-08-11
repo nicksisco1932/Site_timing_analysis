@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_timing.py  (v0.2)
 
@@ -18,6 +17,19 @@ Current behavior:
 Next step (later): port the full CurrentState + timing_summary logic into
 a separate function once we’re happy this core discovery is solid.
 """
+
+# Project: Site Timing Analysis
+# File: testing/tulsa_timing.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Provides a development/testing utility for TULSA timing analysis.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 import os

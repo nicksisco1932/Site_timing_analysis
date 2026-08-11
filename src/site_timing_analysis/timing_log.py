@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/timing_log.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Finds and parses optional timing-log CSV files for timing enrichment.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import csv

@@ -1,13 +1,27 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/ingestion.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Reads required SQLite tables from case local.db sources in read-only analysis mode.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import shutil
 import sqlite3
 import zipfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from .errors import DatabaseReadError, MissingTableError
 from .models import DatabaseSourceRecord, RawAuditEvent
+from .profiling import PerformanceProfiler
 
 
 def _connect_read_only(db_path: Path) -> sqlite3.Connection:
@@ -110,14 +124,27 @@ def ingest_case_database(
     source: DatabaseSourceRecord,
     *,
     extraction_root: Path | None = None,
+    performance_profiler: PerformanceProfiler | None = None,
 ) -> dict[str, Any]:
-    db_path = _resolve_db_file_path(source, extraction_root)
+    staging_timer = (
+        performance_profiler.stage("staging or copying", case_id=source.case_id)
+        if performance_profiler is not None
+        else nullcontext()
+    )
+    with staging_timer:
+        db_path = _resolve_db_file_path(source, extraction_root)
     try:
         conn = _connect_read_only(db_path)
     except DatabaseReadError:
         if source.source_type != "unzipped" or extraction_root is None:
             raise
-        db_path = _stage_unzipped_db_copy(source, extraction_root)
+        retry_staging_timer = (
+            performance_profiler.stage("staging or copying", case_id=source.case_id)
+            if performance_profiler is not None
+            else nullcontext()
+        )
+        with retry_staging_timer:
+            db_path = _stage_unzipped_db_copy(source, extraction_root)
         conn = _connect_read_only(db_path)
     try:
         tables = _table_names(conn)

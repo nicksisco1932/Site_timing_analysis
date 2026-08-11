@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/timing.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Computes state intervals, anchors, durations, and quality flags from state-labeled events.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 from copy import deepcopy

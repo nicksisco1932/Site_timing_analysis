@@ -1,6 +1,19 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/first_slice_cli.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Orchestrates the staged timing pipeline from discovery through plots and diagnostics.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -8,7 +21,7 @@ from uuid import uuid4
 from .config import build_run_config_from_args, resolve_year_list
 from .db_source import resolve_database_source
 from .discovery import discover_cases
-from .errors import SiteTimingError
+from .errors import ConfigValidationError, SiteTimingError
 from .enrichment import (
     derive_session_synthetic_events,
     derive_timing_log_synthetic_events,
@@ -27,6 +40,7 @@ from .models import RunManifest, StateInterval
 from .normalization import normalize_audit_events
 from .output_layout import first_existing_path, output_layout
 from .plotting import generate_timeline_plots
+from .profiling import PerformanceProfiler
 from .state_machine import assign_states
 from .timing import compute_state_intervals
 from .timing_log import find_timing_log, parse_timing_log_csv
@@ -40,6 +54,23 @@ def _case_matches_year(raw_timestamp: str | None, allowed_years: set[int]) -> bo
     if not year_prefix.isdigit():
         return False
     return int(year_prefix) in allowed_years
+
+
+def _read_case_id_file(path: Path | None) -> set[str] | None:
+    """Read an optional newline-delimited case selection file."""
+    if path is None:
+        return None
+    if not path.is_file():
+        raise ConfigValidationError(f"case_id_file does not exist: {path}")
+    case_ids: set[str] = set()
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+        token = raw_line.strip().strip('"')
+        if not token or token.startswith("#"):
+            continue
+        case_ids.add(Path(token).name if ("\\" in token or "/" in token) else token)
+    if not case_ids:
+        raise ConfigValidationError(f"case_id_file is empty: {path}")
+    return case_ids
 
 
 _DIAGNOSTIC_FLAGS = (
@@ -57,6 +88,31 @@ def _warning_category(warning: str) -> str:
     if len(parts) >= 2 and parts[1]:
         return parts[1]
     return "uncategorized"
+
+
+def _profile_stage(
+    profiler: PerformanceProfiler | None,
+    stage: str,
+    *,
+    case_id: str | None = None,
+):
+    """Return an opt-in stage timer or a no-op context manager."""
+    if profiler is None:
+        return nullcontext()
+    return profiler.stage(stage, case_id=case_id)
+
+
+@contextmanager
+def _profile_artifact_write(
+    profiler: PerformanceProfiler | None,
+    *,
+    subtype: str,
+    case_id: str | None = None,
+):
+    """Measure an artifact write once in the write parent and its subtype."""
+    with _profile_stage(profiler, "all artifact writes", case_id=case_id):
+        with _profile_stage(profiler, subtype, case_id=case_id):
+            yield
 
 
 def build_run_diagnostics(
@@ -220,16 +276,34 @@ def write_diagnostics_summary(
     return out_path
 
 
-def run_first_slice(argv: list[str] | None = None) -> RunManifest:
-    started_at = datetime.now(timezone.utc)
-    config = build_run_config_from_args(argv)
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    layout = output_layout(config.output_dir)
-    allowed_years = set(resolve_year_list(config.year_selection))
-    site_root = config.site_path if config.site_path is not None else config.root_dir / config.site_code
+def run_first_slice(
+    argv: list[str] | None = None,
+    *,
+    performance_profiler: PerformanceProfiler | None = None,
+) -> RunManifest:
+    with _profile_stage(performance_profiler, "global setup and teardown"):
+        started_at = datetime.now(timezone.utc)
+        config = build_run_config_from_args(argv)
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        layout = output_layout(config.output_dir)
+        allowed_years = set(resolve_year_list(config.year_selection))
+        site_root = config.site_path if config.site_path is not None else config.root_dir / config.site_code
 
-    case_records = discover_cases(config)
-    case_manifest_path = write_case_manifest(case_records, config.output_dir)
+    extra_case_prefixes = (
+        ("STA_",)
+        if config.tff_adapter_enabled
+        and config.tff_filter_known_exclusions
+        and config.site_code.casefold().startswith("stanford_")
+        else ()
+    )
+    with _profile_stage(performance_profiler, "directory discovery"):
+        case_records = discover_cases(config, extra_case_prefixes=extra_case_prefixes)
+    with _profile_stage(performance_profiler, "case selection"):
+        selected_case_ids = _read_case_id_file(config.case_id_file)
+        if selected_case_ids is not None:
+            case_records = [record for record in case_records if record.case_id in selected_case_ids]
+    with _profile_artifact_write(performance_profiler, subtype="CSV export"):
+        case_manifest_path = write_case_manifest(case_records, config.output_dir)
 
     case_results: list[dict[str, object]] = []
     warnings: list[str] = []
@@ -239,6 +313,12 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
     processed_case_result_indexes: list[int] = []
 
     for case_record in case_records:
+        case_profile_timer = _profile_stage(
+            performance_profiler,
+            "per-case orchestration outside named stages",
+            case_id=case_record.case_id,
+        )
+        case_profile_timer.__enter__()
         try:
             if (
                 len(case_record.candidate_unzipped_db_paths) == 0
@@ -252,18 +332,55 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
                     }
                 )
                 warnings.extend(case_record.warnings)
+                if performance_profiler is not None:
+                    performance_profiler.add_case_warnings(case_record.case_id, list(case_record.warnings))
+                case_profile_timer.__exit__(None, None, None)
                 continue
 
-            source = resolve_database_source(
-                case_record,
-                allow_ambiguous=config.allow_ambiguous_db,
-                db_candidate_index=config.db_candidate_index,
-                zip_member_index=config.zip_member_index,
-            )
+            with _profile_stage(
+                performance_profiler,
+                "database candidate resolution",
+                case_id=case_record.case_id,
+            ):
+                source = resolve_database_source(
+                    case_record,
+                    allow_ambiguous=config.allow_ambiguous_db,
+                    db_candidate_index=config.db_candidate_index,
+                    zip_member_index=config.zip_member_index,
+                )
 
-            ingestion_result = ingest_case_database(source, extraction_root=layout.db_extract_dir)
+            with _profile_stage(
+                performance_profiler,
+                "database connection and ingestion",
+                case_id=case_record.case_id,
+            ):
+                ingestion_result = ingest_case_database(
+                    source,
+                    extraction_root=layout.db_extract_dir,
+                    performance_profiler=performance_profiler,
+                )
             raw_events = ingestion_result["raw_events"]
             sessions_rows = ingestion_result["sessions_rows"]
+            if performance_profiler is not None:
+                performance_profiler.set_case_metrics(
+                    case_record.case_id,
+                    database_rows_read=len(raw_events) + len(sessions_rows),
+                )
+                ingested_db_path = Path(ingestion_result["db_path"]).resolve()
+                try:
+                    ingested_db_path.relative_to(config.output_dir.resolve())
+                except ValueError:
+                    pass
+                else:
+                    with _profile_stage(
+                        performance_profiler,
+                        "final output discovery",
+                        case_id=case_record.case_id,
+                    ):
+                        performance_profiler.record_output_paths(
+                            case_record.case_id,
+                            [ingested_db_path],
+                        )
             if raw_events:
                 first_timestamp = raw_events[0].raw_timestamp
             else:
@@ -277,58 +394,110 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
                         "first_timestamp": first_timestamp,
                     }
                 )
+                case_profile_timer.__exit__(None, None, None)
                 continue
 
-            normalized_events, dropped_events = normalize_audit_events(raw_events)
-            normalized_export_path = write_normalized_events_csv(
+            with _profile_stage(
+                performance_profiler,
+                "event normalization",
                 case_id=case_record.case_id,
-                normalized_events=normalized_events,
-                output_dir=config.output_dir,
-            )
-
-            session_synthetic_events, session_warnings = derive_session_synthetic_events(
-                case_record.case_id,
-                sessions_rows,
-            )
-
-            timing_entries = []
-            timing_parse_warnings: list[str] = []
-            timing_log_synthetic_events = []
-            timing_mapping_warnings: list[str] = []
-            timing_log_path = find_timing_log(
-                case_record.case_id,
-                resolved_site_root=site_root,
-                timing_log_dir_override=config.timing_log_dir,
-            )
-            if timing_log_path is not None:
-                timing_entries, timing_parse_warnings = parse_timing_log_csv(
-                    timing_log_path,
+            ):
+                normalized_events, dropped_events = normalize_audit_events(raw_events)
+            with _profile_artifact_write(
+                performance_profiler,
+                subtype="CSV export",
+                case_id=case_record.case_id,
+            ):
+                normalized_export_path = write_normalized_events_csv(
+                    case_id=case_record.case_id,
+                    normalized_events=normalized_events,
+                    output_dir=config.output_dir,
+                )
+            if performance_profiler is not None:
+                performance_profiler.set_case_metrics(
                     case_record.case_id,
-                )
-                timing_log_synthetic_events, timing_mapping_warnings = derive_timing_log_synthetic_events(
-                    timing_entries
+                    normalized_events=len(normalized_events),
                 )
 
-            synthetic_events = [*session_synthetic_events, *timing_log_synthetic_events]
-            enriched_events = merge_enriched_events(normalized_events, synthetic_events)
-            enriched_export_path = write_enriched_events_csv(
+            with _profile_stage(
+                performance_profiler,
+                "event enrichment",
                 case_id=case_record.case_id,
-                enriched_events=enriched_events,
-                output_dir=config.output_dir,
-            )
+            ):
+                session_synthetic_events, session_warnings = derive_session_synthetic_events(
+                    case_record.case_id,
+                    sessions_rows,
+                )
 
-            state_labeled_events, state_warnings = assign_states(enriched_events)
-            state_labeled_export_path = write_state_labeled_events_csv(
+                timing_entries = []
+                timing_parse_warnings: list[str] = []
+                timing_log_synthetic_events = []
+                timing_mapping_warnings: list[str] = []
+                timing_log_path = find_timing_log(
+                    case_record.case_id,
+                    resolved_site_root=site_root,
+                    timing_log_dir_override=config.timing_log_dir,
+                )
+                if timing_log_path is not None:
+                    timing_entries, timing_parse_warnings = parse_timing_log_csv(
+                        timing_log_path,
+                        case_record.case_id,
+                    )
+                    timing_log_synthetic_events, timing_mapping_warnings = derive_timing_log_synthetic_events(
+                        timing_entries
+                    )
+
+                synthetic_events = [*session_synthetic_events, *timing_log_synthetic_events]
+                enriched_events = merge_enriched_events(normalized_events, synthetic_events)
+            with _profile_artifact_write(
+                performance_profiler,
+                subtype="CSV export",
                 case_id=case_record.case_id,
-                state_labeled_events=state_labeled_events,
-                output_dir=config.output_dir,
-            )
-            state_intervals, timing_warnings = compute_state_intervals(state_labeled_events)
-            state_interval_export_path = write_state_intervals_csv(
+            ):
+                enriched_export_path = write_enriched_events_csv(
+                    case_id=case_record.case_id,
+                    enriched_events=enriched_events,
+                    output_dir=config.output_dir,
+                )
+
+            with _profile_stage(
+                performance_profiler,
+                "state labeling",
                 case_id=case_record.case_id,
-                state_intervals=state_intervals,
-                output_dir=config.output_dir,
-            )
+            ):
+                state_labeled_events, state_warnings = assign_states(enriched_events)
+            with _profile_artifact_write(
+                performance_profiler,
+                subtype="CSV export",
+                case_id=case_record.case_id,
+            ):
+                state_labeled_export_path = write_state_labeled_events_csv(
+                    case_id=case_record.case_id,
+                    state_labeled_events=state_labeled_events,
+                    output_dir=config.output_dir,
+                )
+            with _profile_stage(
+                performance_profiler,
+                "interval construction",
+                case_id=case_record.case_id,
+            ):
+                state_intervals, timing_warnings = compute_state_intervals(state_labeled_events)
+            with _profile_artifact_write(
+                performance_profiler,
+                subtype="CSV export",
+                case_id=case_record.case_id,
+            ):
+                state_interval_export_path = write_state_intervals_csv(
+                    case_id=case_record.case_id,
+                    state_intervals=state_intervals,
+                    output_dir=config.output_dir,
+                )
+            if performance_profiler is not None:
+                performance_profiler.set_case_metrics(
+                    case_record.case_id,
+                    labeled_events=len(state_labeled_events),
+                    intervals=len(state_intervals),
+                )
 
             case_warnings = [
                 *source.warnings,
@@ -372,8 +541,23 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
             intervals_for_plot.extend(state_intervals)
             processed_case_result_indexes.append(len(case_results) - 1)
             warnings.extend(case_warnings)
+            if performance_profiler is not None:
+                performance_profiler.add_case_warnings(case_record.case_id, case_warnings)
+                performance_profiler.record_output_paths(
+                    case_record.case_id,
+                    [
+                        normalized_export_path,
+                        enriched_export_path,
+                        state_labeled_export_path,
+                        state_interval_export_path,
+                    ],
+                )
+            case_profile_timer.__exit__(None, None, None)
         except SiteTimingError as exc:
             failed += 1
+            if performance_profiler is not None:
+                performance_profiler.add_case_failure(case_record.case_id, str(exc))
+            case_profile_timer.__exit__(type(exc), exc, exc.__traceback__)
             case_results.append(
                 {
                     "case_id": case_record.case_id,
@@ -384,28 +568,39 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
 
     plot_paths: dict[str, object] = {}
     if processed_case_result_indexes:
-        generated_plot_paths, plot_warnings = generate_timeline_plots(intervals_for_plot, config.output_dir)
-        plot_paths = {key: str(path) for key, path in generated_plot_paths.items()}
-        warnings.extend(plot_warnings)
+        with _profile_stage(performance_profiler, "global plot orchestration"):
+            with _profile_stage(performance_profiler, "all artifact writes"):
+                with _profile_stage(performance_profiler, "plot generation"):
+                    generated_plot_paths, plot_warnings = generate_timeline_plots(
+                        intervals_for_plot,
+                        config.output_dir,
+                    )
+            plot_paths = {key: str(path) for key, path in generated_plot_paths.items()}
+            warnings.extend(plot_warnings)
 
-        for idx in processed_case_result_indexes:
-            case_id = str(case_results[idx]["case_id"])
-            case_plot_warnings = [warning for warning in plot_warnings if warning.startswith(f"{case_id}:")]
-            case_results[idx]["plot_warning_count"] = len(case_plot_warnings)
-            case_results[idx]["plot_warnings"] = case_plot_warnings
-            case_results[idx]["normalized_timeline_plot"] = plot_paths.get("normalized_timeline")
-            case_results[idx]["original_hour_timeline_plot"] = plot_paths.get("original_hour_timeline")
+            for idx in processed_case_result_indexes:
+                case_id = str(case_results[idx]["case_id"])
+                case_plot_warnings = [warning for warning in plot_warnings if warning.startswith(f"{case_id}:")]
+                case_results[idx]["plot_warning_count"] = len(case_plot_warnings)
+                case_results[idx]["plot_warnings"] = case_plot_warnings
+                case_results[idx]["normalized_timeline_plot"] = plot_paths.get("normalized_timeline")
+                case_results[idx]["original_hour_timeline_plot"] = plot_paths.get("original_hour_timeline")
+                if performance_profiler is not None:
+                    performance_profiler.add_case_warnings(case_id, case_plot_warnings)
+            if performance_profiler is not None:
+                performance_profiler.record_global_output_paths(list(plot_paths.values()))
     else:
         warnings.append("plot:skipped_no_processed_cases")
 
     tff_artifact_paths: dict[str, str] = {}
     if config.tff_adapter_enabled:
-        case_results, tff_artifact_paths, tff_warnings = apply_read_only_tff_adapter(
-            case_results=case_results,
-            output_dir=config.output_dir,
-            tff_case_table=config.tff_normalized_case_table,
-            filter_known_exclusions=config.tff_filter_known_exclusions,
-        )
+        with _profile_stage(performance_profiler, "all artifact writes"):
+            case_results, tff_artifact_paths, tff_warnings = apply_read_only_tff_adapter(
+                case_results=case_results,
+                output_dir=config.output_dir,
+                tff_case_table=config.tff_normalized_case_table,
+                filter_known_exclusions=config.tff_filter_known_exclusions,
+            )
         warnings.extend(tff_warnings)
 
     run_manifest_path = layout.run_manifest_path
@@ -440,17 +635,32 @@ def run_first_slice(argv: list[str] | None = None) -> RunManifest:
         case_results=case_results,
         artifact_paths=artifact_paths,
     )
-    write_run_manifest(run_manifest, config.output_dir)
+    with _profile_artifact_write(performance_profiler, subtype="report generation"):
+        write_run_manifest(run_manifest, config.output_dir)
 
     if config.diagnostics:
-        diagnostics_path = write_diagnostics_summary(
-            run_manifest=run_manifest,
-            state_intervals=intervals_for_plot,
-            output_dir=config.output_dir,
-            diagnostics_file=config.diagnostics_file,
-        )
+        with _profile_artifact_write(performance_profiler, subtype="report generation"):
+            diagnostics_path = write_diagnostics_summary(
+                run_manifest=run_manifest,
+                state_intervals=intervals_for_plot,
+                output_dir=config.output_dir,
+                diagnostics_file=config.diagnostics_file,
+            )
         run_manifest.artifact_paths["diagnostics_summary"] = str(diagnostics_path)
-        write_run_manifest(run_manifest, config.output_dir)
+        with _profile_artifact_write(performance_profiler, subtype="report generation"):
+            write_run_manifest(run_manifest, config.output_dir)
+
+    if performance_profiler is not None:
+        with _profile_stage(performance_profiler, "final output discovery"):
+            performance_profiler.record_global_output_paths(
+                [
+                    case_manifest_path,
+                    run_manifest_path,
+                    *plot_paths.values(),
+                    *tff_artifact_paths.values(),
+                    run_manifest.artifact_paths.get("diagnostics_summary"),
+                ]
+            )
 
     return run_manifest
 

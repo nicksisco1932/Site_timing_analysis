@@ -1,6 +1,18 @@
 @echo off
 setlocal enabledelayedexpansion
 
+REM Project: Site Timing Analysis
+REM File: time_sanity.bat
+REM Primary author: Nicholas J. Sisco, Ph.D.
+REM Organization: Profound Medical, LLC
+REM Created: 2026-03-03
+REM Purpose: Runs the time sanity timing-analysis workflow from Windows batch.
+REM
+REM Provenance: Original implementation or material contribution by
+REM Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+REM
+REM Rights status: Proprietary / internal use unless otherwise specified
+REM by Profound Medical, LLC.
 REM -------------------------------------------------------------
 REM STEP 4: Time sanity check (clock + noon/multi-day)
 REM -------------------------------------------------------------

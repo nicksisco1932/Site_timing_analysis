@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_state_histograms.py  (v0.1)
 ---------------------------------
@@ -13,6 +12,19 @@ Input:
 Output (in plots/ under analysis root):
     site_<site>_hist_<phase>.png
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_state_histograms.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA state histograms workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from pathlib import Path

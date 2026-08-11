@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: testing/tests/test_pipeline_slice.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Tests pipeline slice behavior for the Site Timing Analysis workflow.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import csv
@@ -109,6 +121,22 @@ def test_discovery_skips_noncanonical_case_prefixes(tmp_path: Path) -> None:
     records = discover_cases(config)
 
     assert [record.case_id for record in records] == ["064_01-002", "064_01-010"]
+
+
+def test_discovery_can_include_opt_in_case_prefixes(tmp_path: Path) -> None:
+    site_root = tmp_path / "Stanford_064"
+    (site_root / "064_01-002").mkdir(parents=True)
+    (site_root / "STA_01-003").mkdir(parents=True)
+
+    config = build_run_config(
+        site_code="Stanford_064",
+        year_selection="All",
+        root_dir=tmp_path,
+        output_dir=tmp_path / "out",
+    )
+    records = discover_cases(config, extra_case_prefixes=("STA_",))
+
+    assert [record.case_id for record in records] == ["064_01-002", "STA_01-003"]
 
 
 def test_db_source_precedence_prefers_unzipped_over_zip(tmp_path: Path) -> None:

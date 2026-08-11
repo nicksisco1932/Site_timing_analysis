@@ -16,16 +16,25 @@ dist/
 *.egg-info/
 
 # Generated run artifacts
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 /run_outputs/
 /run_outputs_*/
 /manifests/
 /test_output/
 /testing/test_output/
 /Legacy/run_outputs_archive/
+/docs/*.xlsx
 /outputs/*
 !/outputs/comparisons/
 !/outputs/comparisons/**
 /.pytest_tmp*/
+
+# Local upstream archive retained for the vendored Sync transport snapshot
+/tools/profoundtools/upstream.zip
 
 # OS/editor noise
 .DS_Store

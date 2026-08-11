@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_time_sanity.py  (v0.3)
 ----------------------------
@@ -37,6 +36,19 @@ Changes in v0.3
 - Procedural metrics use only rows with CurrentState != "" when that
   column is present; otherwise they are left NaN/False.
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_time_sanity.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA time sanity workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from pathlib import Path

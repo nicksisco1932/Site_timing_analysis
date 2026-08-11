@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/discovery.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Discovers timing-analysis cases and candidate database files for a site run.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import glob
@@ -46,15 +58,43 @@ def _expected_case_prefix(site_code: str) -> str | None:
     return f"{match.group(1)}_"
 
 
-def discover_cases(config: RunConfig) -> list[CaseDiscoveryRecord]:
+def discover_cases(
+    config: RunConfig,
+    *,
+    extra_case_prefixes: tuple[str, ...] = (),
+) -> list[CaseDiscoveryRecord]:
+    """Discover case directories using the site's canonical prefix policy.
+
+    Args:
+        config: Validated run configuration containing the site root and site code.
+        extra_case_prefixes: Optional case-name prefixes to include in addition to
+            the site's canonical prefix. The default is empty and preserves the
+            standard discovery behavior.
+
+    Returns:
+        Deterministically ordered case discovery records.
+
+    Assumptions:
+        Extra prefixes are opt-in because they are used for explicitly requested
+        compatibility cases, such as known TFF exclusions.
+    """
     site_root = config.site_path if config.site_path is not None else config.root_dir / config.site_code
     if not site_root.exists() or not site_root.is_dir():
         raise DiscoveryError(f"Site path not found or not a directory: {site_root}")
 
     case_dirs = [path for path in site_root.iterdir() if path.is_dir()]
     expected_prefix = _expected_case_prefix(config.site_code)
-    if expected_prefix is not None:
-        case_dirs = [path for path in case_dirs if path.name.startswith(expected_prefix)]
+    allowed_prefixes = tuple(
+        prefix
+        for prefix in (expected_prefix, *extra_case_prefixes)
+        if prefix is not None and str(prefix)
+    )
+    if allowed_prefixes:
+        case_dirs = [
+            path
+            for path in case_dirs
+            if any(path.name.startswith(prefix) for prefix in allowed_prefixes)
+        ]
     case_dirs = sorted(case_dirs, key=lambda p: p.name.lower())
 
     records: list[CaseDiscoveryRecord] = []

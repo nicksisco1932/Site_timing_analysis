@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/site_comparison.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-19
+# Purpose: Builds anonymized site-to-site state-duration comparison tables and plots.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import argparse
@@ -198,7 +210,7 @@ def create_comparison_figure(data: ComparisonData) -> tuple[plt.Figure, plt.Axes
         positions = base_positions + offsets[site_label]
         boxplot = ax.boxplot(
             box_data,
-            vert=False,
+            orientation="horizontal",
             positions=positions,
             widths=0.3,
             patch_artist=True,

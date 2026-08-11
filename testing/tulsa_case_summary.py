@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_case_summary.py  (v0.1)
 
@@ -12,6 +11,19 @@ Input:
 Output:
     timing_summary_<site>.csv in --outdir
 """
+
+# Project: Site Timing Analysis
+# File: testing/tulsa_case_summary.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Provides a development/testing utility for TULSA case summary analysis.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from pathlib import Path

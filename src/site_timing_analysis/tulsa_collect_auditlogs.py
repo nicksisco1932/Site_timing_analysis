@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_collect_auditlogs.py  (v0.1)
 
@@ -15,12 +14,25 @@ No Excel timing sheets, no state machine, no plotting.
 Just raw AuditLogRecords + basic identifiers.
 
 Also supports a direct single-DB mode for local smoke testing:
-    python tulsa_collect_auditlogs.py --db-path testing/test_data/local.db --outdir out
+    python tulsa_collect_auditlogs.py --db-path <path-to-local.db> --outdir out
 
 Usage examples:
     python tulsa_collect_auditlogs.py --site Stanford_064
     python tulsa_collect_auditlogs.py --site Stanford_064 --years 2021
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_collect_auditlogs.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA collect auditlogs workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 import re

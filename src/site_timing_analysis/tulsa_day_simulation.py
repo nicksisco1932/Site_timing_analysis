@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_day_simulation.py  (v0.2)
 -------------------------------
@@ -33,6 +32,19 @@ Outputs:
     - day_sim_<site>.csv          (per-simulation metrics)
     - day_sim_summary_<site>.csv  (aggregated metrics)
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_day_simulation.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA day simulation workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from datetime import datetime, timedelta, time as dtime

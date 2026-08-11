@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_time_cutoff.py  (v0.1)
 ----------------------------
@@ -19,6 +18,19 @@ For each PtId, using the procedural window (CurrentState != ""):
     - any_after_cutoff      (any event at/after cutoff)
     - crossed_cutoff        (first < cutoff, last >= cutoff)
 """
+
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/tulsa_time_cutoff.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Implements the legacy-compatible TULSA time cutoff workflow script.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 from pathlib import Path

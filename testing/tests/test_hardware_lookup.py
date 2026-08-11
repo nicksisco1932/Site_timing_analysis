@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: testing/tests/test_hardware_lookup.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-13
+# Purpose: Tests hardware lookup behavior for the Site Timing Analysis workflow.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import csv

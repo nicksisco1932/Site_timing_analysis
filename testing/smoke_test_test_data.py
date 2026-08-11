@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Run a repeatable smoke test against testing/test_data/local.db.
+Run a repeatable smoke test against a generated synthetic SQLite fixture.
 
 This is intentionally narrow:
 - collect raw AuditLogRecords from a direct local.db path
@@ -11,6 +11,18 @@ This is intentionally narrow:
 - print unmapped event types so parity work has a concrete target
 """
 
+# Project: Site Timing Analysis
+# File: testing/smoke_test_test_data.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Runs a repeatable smoke test against the local test database fixture.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 import subprocess
@@ -18,6 +30,8 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+
+from synthetic_test_db import create_synthetic_test_db
 
 
 def run_step(repo_root: Path, *args: str) -> None:
@@ -35,12 +49,12 @@ def run_step(repo_root: Path, *args: str) -> None:
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    db_path = repo_root / "testing" / "test_data" / "local.db"
     outdir = repo_root / "testing" / "test_output" / "test_data_smoke"
     outdir.mkdir(parents=True, exist_ok=True)
-
-    if not db_path.exists():
-        raise FileNotFoundError(f"Expected test DB not found: {db_path}")
+    db_path = create_synthetic_test_db(
+        outdir / "fixture" / "local.db",
+        overwrite=True,
+    )
 
     site = "TESTDATA"
 

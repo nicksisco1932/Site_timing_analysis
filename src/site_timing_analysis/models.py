@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: src/site_timing_analysis/models.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-11
+# Purpose: Defines dataclass contracts shared across the staged timing pipeline.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,6 +28,7 @@ class RunConfig:
     root_dir: Path
     output_dir: Path
     site_path: Path | None = None
+    case_id_file: Path | None = None
     allow_ambiguous_db: bool = False
     db_candidate_index: int | None = None
     zip_member_index: int | None = None

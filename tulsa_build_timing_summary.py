@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: tulsa_build_timing_summary.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Delegates the root-level tulsa_build_timing_summary.py entry point to the packaged module of the same name.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from _run_src_module import run_entry
 
 

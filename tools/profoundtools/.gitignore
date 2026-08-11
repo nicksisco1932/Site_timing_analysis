@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Site share links — NEVER commit these.
+# A sync.com link URL embeds the share's decryption key. It is not sufficient for
+# access on its own (the API rejects every call without the password), but it
+# does not belong in git history. Keep the real mapping local; the committed
+# sites.example.json documents the shape.
+sites.json
+
+# Saved plans quote the remote file listing and the per-file encrypted data keys.
+plan*.json
+
+# Downloaded logs contain clinical session data.
+_staging/
+*.part

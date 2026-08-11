@@ -1,3 +1,15 @@
+# Project: Site Timing Analysis
+# File: testing/tests/test_timing_gantt_workflow.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-19
+# Purpose: Tests timing gantt workflow behavior for the Site Timing Analysis workflow.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 from __future__ import annotations
 
 from pathlib import Path

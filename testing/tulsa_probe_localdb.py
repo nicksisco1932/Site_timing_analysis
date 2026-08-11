@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 tulsa_probe_localdb.py
 
@@ -11,6 +10,19 @@ Minimal probe script to verify we can:
 
 No Excel. No year filtering. `local.db` only.
 """
+
+# Project: Site Timing Analysis
+# File: testing/tulsa_probe_localdb.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-03-03
+# Purpose: Provides a development/testing utility for TULSA probe localdb analysis.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
 
 import argparse
 import os
