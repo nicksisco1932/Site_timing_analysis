@@ -19,6 +19,14 @@
   normalized historical CSV parity passed.
 - Kept the clinical-derived store and SQL export outside Git. Cache integration
   and broader SQL-native reporting remain TODO #6 follow-up work.
+- Relocated the sole operational store and its ASUI export to the locally pinned
+  `OneDrive - Profound Medical\Documents\10_Databases` directory through a
+  validated SQLite backup and staged export publication. The old local store,
+  its WAL/SHM sidecars, export, and now-empty directories were removed only
+  after logical-content and export parity passed.
+- Changed writable store connections to `DELETE` journaling with full
+  synchronization and bounded lock waiting. Added a safe relocation/verification
+  CLI and an explicit single-writer workstation rule for OneDrive.
 
 ## 2026-08-11 - Validated Single-Case Acquisition
 

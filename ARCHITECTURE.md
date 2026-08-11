@@ -146,6 +146,11 @@ embedding the implementation of each stage.
   source/parser/configuration case analysis, and rejects deterministic conflicts
   or changed content under an existing run ID. It does not participate in live
   pipeline parsing or acquisition.
+- `store_relocation.py` owns rollback-safe store movement and post-sync
+  verification. It uses SQLite backup rather than file copying, deterministic
+  schema/data hashing, staged non-overwriting publication, explicit source-file
+  cleanup, and Windows local/pinned-state checks. It never recursively deletes
+  a store directory.
 
 ## Legacy Compatibility Surface
 
@@ -168,6 +173,11 @@ or normalization modules.
   every downstream export.
 - Clinical-derived analytical stores and their exports must use an explicit
   path outside both the repository and imported run directories.
+- The sole operational store is
+  `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite`.
+  It uses `DELETE` journaling and one workstation may write it. Other OneDrive-
+  synchronized copies are backup/read-only; OneDrive is not a database-locking
+  mechanism.
 
 ## Deferred Work
 

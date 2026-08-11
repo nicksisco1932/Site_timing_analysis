@@ -39,6 +39,13 @@ from site_timing_analysis.analytical_store import (
     prepare_run_import,
     validate_database_path,
 )
+from site_timing_analysis import store_relocation
+from site_timing_analysis.store_relocation import (
+    capture_database_snapshot,
+    logical_database_hash,
+    relocate_store,
+    verify_relocated_store,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -367,11 +374,14 @@ def test_initialization_is_versioned_transactional_and_reopenable(tmp_path: Path
         assert tuple(migration[:2]) == (1, "initial_timeline_store")
         assert migration["checksum_sha256"] == analytical_store._migration_checksum()
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         connection.execute(
             "UPDATE schema_migrations SET checksum_sha256 = 'INVALID' WHERE version = 1"
         )
     with pytest.raises(AnalyticalStoreError, match="checksum"):
         initialize_database(database)
+    assert not Path(str(database) + "-wal").exists()
+    assert not Path(str(database) + "-shm").exists()
 
 
 def test_complete_import_export_raw_payload_and_idempotency(tmp_path: Path) -> None:
@@ -626,3 +636,190 @@ def test_parser_dataclass_can_express_a_historical_version() -> None:
     original = _parser("one")
     changed = replace(original, source_fingerprint_sha256=_parser("two").source_fingerprint_sha256)
     assert changed.source_fingerprint_sha256 != original.source_fingerprint_sha256
+
+
+def _prepare_source_store(tmp_path: Path) -> tuple[Path, Path, str]:
+    run_id = "run-001"
+    run_dir = _build_run(tmp_path / "runs", run_id=run_id)
+    source_database = tmp_path / "old_store" / "timeline_analysis.sqlite"
+    source_export = tmp_path / "old_store" / "exports" / "test_001_timeline_analysis.csv"
+    initialize_database(source_database)
+    import_run(source_database, run_dir, parser_version=_parser())
+    export_wide(source_database, run_id, source_export)
+    return source_database, source_export, run_id
+
+
+def test_logical_hash_is_order_independent_and_type_complete(tmp_path: Path) -> None:
+    first = tmp_path / "first.sqlite"
+    second = tmp_path / "second.sqlite"
+    for path, rows in (
+        (first, [(2, None, b"\x00\xff", 1.25), (1, "text", b"abc", -0.0)]),
+        (second, [(1, "text", b"abc", -0.0), (2, None, b"\x00\xff", 1.25)]),
+    ):
+        connection = sqlite3.connect(path)
+        connection.execute(
+            "CREATE TABLE typed_values (id INTEGER PRIMARY KEY, text_value TEXT, "
+            "blob_value BLOB, real_value REAL)"
+        )
+        connection.executemany("INSERT INTO typed_values VALUES (?, ?, ?, ?)", rows)
+        connection.commit()
+        connection.close()
+    with sqlite3.connect(first) as first_connection, sqlite3.connect(second) as second_connection:
+        assert logical_database_hash(first_connection) == logical_database_hash(second_connection)
+        second_connection.execute(
+            "UPDATE typed_values SET blob_value = ? WHERE id = 2", (b"changed",)
+        )
+        second_connection.commit()
+        assert logical_database_hash(first_connection) != logical_database_hash(second_connection)
+
+
+def test_relocation_is_non_overwriting_idempotent_and_cleanup_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_database, source_export, run_id = _prepare_source_store(tmp_path)
+    destination_root = tmp_path / "destination"
+    destination_root.mkdir()
+    destination_database = destination_root / "timeline_analysis.sqlite"
+    destination_export = destination_root / "exports" / "test_001_timeline_analysis.csv"
+    monkeypatch.setattr(store_relocation, "onedrive_process_running", lambda: False)
+
+    first = relocate_store(
+        source_database=source_database,
+        destination_database=destination_database,
+        source_export=source_export,
+        destination_export=destination_export,
+        run_id=run_id,
+        confirm_onedrive_stopped=True,
+        cleanup_source=False,
+        pin_destination=False,
+    )
+    assert first.status == "RELOCATED"
+    assert source_database.is_file()
+    assert destination_database.is_file()
+    assert destination_export.read_bytes() == source_export.read_bytes()
+    assert capture_database_snapshot(destination_database).journal_mode == "delete"
+    assert not Path(str(destination_database) + "-wal").exists()
+    assert not Path(str(destination_database) + "-shm").exists()
+
+    second = relocate_store(
+        source_database=source_database,
+        destination_database=destination_database,
+        source_export=source_export,
+        destination_export=destination_export,
+        run_id=run_id,
+        confirm_onedrive_stopped=True,
+        cleanup_source=True,
+        pin_destination=False,
+    )
+    assert second.status == "VERIFIED_EXISTING_DESTINATION"
+    assert not source_database.exists()
+    assert not source_export.exists()
+    assert destination_database.is_file()
+    assert destination_export.is_file()
+    verified = verify_relocated_store(
+        database=destination_database,
+        output=destination_export,
+        run_id=run_id,
+        require_pinned=False,
+    )
+    assert verified["status"] == "VERIFIED"
+    assert set(verified["local_states"]) == {
+        "database_directory",
+        "database",
+        "export_directory",
+        "export",
+    }
+    assert all(
+        state["fully_local"] for state in verified["local_states"].values()
+    )
+
+
+def test_relocation_rejects_unexpected_destination_without_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_database, source_export, run_id = _prepare_source_store(tmp_path)
+    destination_root = tmp_path / "destination"
+    destination_root.mkdir()
+    destination_database = destination_root / "timeline_analysis.sqlite"
+    initialize_database(destination_database)
+    monkeypatch.setattr(store_relocation, "onedrive_process_running", lambda: False)
+
+    with pytest.raises(AnalyticalStoreError, match="not the intended migration output"):
+        relocate_store(
+            source_database=source_database,
+            destination_database=destination_database,
+            source_export=source_export,
+            destination_export=destination_root / "exports" / "result.csv",
+            run_id=run_id,
+            confirm_onedrive_stopped=True,
+            cleanup_source=True,
+            pin_destination=False,
+        )
+    assert source_database.is_file()
+    assert source_export.is_file()
+
+
+def test_export_conflict_does_not_publish_database_or_clean_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_database, source_export, run_id = _prepare_source_store(tmp_path)
+    destination_root = tmp_path / "destination"
+    destination_root.mkdir()
+    destination_database = destination_root / "timeline_analysis.sqlite"
+    destination_export = destination_root / "exports" / "result.csv"
+    destination_export.parent.mkdir()
+    destination_export.write_text("unrelated", encoding="utf-8")
+    monkeypatch.setattr(store_relocation, "onedrive_process_running", lambda: False)
+
+    with pytest.raises(AnalyticalStoreError, match="Wide export schema mismatch"):
+        relocate_store(
+            source_database=source_database,
+            destination_database=destination_database,
+            source_export=source_export,
+            destination_export=destination_export,
+            run_id=run_id,
+            confirm_onedrive_stopped=True,
+            cleanup_source=True,
+            pin_destination=False,
+        )
+    assert not destination_database.exists()
+    assert source_database.is_file()
+    assert source_export.is_file()
+    assert destination_export.read_text(encoding="utf-8") == "unrelated"
+
+
+def test_relocation_requires_stopped_onedrive_and_rejects_sidecars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_database, source_export, run_id = _prepare_source_store(tmp_path)
+    destination_root = tmp_path / "destination"
+    destination_root.mkdir()
+    destination_database = destination_root / "timeline_analysis.sqlite"
+    destination_sidecar = Path(str(destination_database) + "-wal")
+    destination_sidecar.write_bytes(b"unexpected")
+    monkeypatch.setattr(store_relocation, "onedrive_process_running", lambda: True)
+
+    with pytest.raises(AnalyticalStoreError, match="OneDrive.exe is still running"):
+        relocate_store(
+            source_database=source_database,
+            destination_database=destination_database,
+            source_export=source_export,
+            destination_export=destination_root / "exports" / "result.csv",
+            run_id=run_id,
+            confirm_onedrive_stopped=True,
+            cleanup_source=False,
+            pin_destination=False,
+        )
+    monkeypatch.setattr(store_relocation, "onedrive_process_running", lambda: False)
+    with pytest.raises(AnalyticalStoreError, match="destination sidecar"):
+        relocate_store(
+            source_database=source_database,
+            destination_database=destination_database,
+            source_export=source_export,
+            destination_export=destination_root / "exports" / "result.csv",
+            run_id=run_id,
+            confirm_onedrive_stopped=True,
+            cleanup_source=False,
+            pin_destination=False,
+        )
+    assert source_database.is_file()

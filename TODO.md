@@ -425,7 +425,7 @@ Phase 1 completion evidence:
 - Synthetic store regression covers complete and partial runs, raw payload
   round-trip, exact export formatting, idempotency, historical versions,
   conflicts, invalid artifacts, rollback, and destination safety.
-- Validation completed with `15` focused store tests and `186` passing tests in
+- Validation completed with `20` focused store tests and `191` passing tests in
   the full repository suite; CLI help, `pip check`, and `git diff --check` pass.
 - Live ASUI import stored 9 run cases, 1,226 canonical events, 1,226 detailed
   intervals, and 45 reconciliation rows. An identical second import added zero
@@ -433,8 +433,12 @@ Phase 1 completion evidence:
   comparisons passed.
 - The SQL export has the exact 20-column contract and matches the historical
   ASUI values after converting its older full-ISO endpoint cells to the current
-  clock-only format. The store and export are outside Git under
-  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_store`.
+  clock-only format. The sole operational store and export are outside Git under
+  `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases`.
+- The live store relocation used deterministic schema/data parity, staged
+  non-overwriting publication, and locally pinned OneDrive files. The old store,
+  matching sidecars, old export, and empty directories were removed only after
+  validation; this workstation is the sole permitted writer.
 
 Remaining completion criteria:
 

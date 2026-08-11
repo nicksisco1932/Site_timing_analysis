@@ -153,7 +153,8 @@ Import validated run artifacts into the versioned cross-site SQLite store, then
 recreate the public wide CSV from unrounded SQL-backed interval totals:
 
 ```powershell
-$database = "C:\Users\NicholasSisco\Documents\Site_timing_analysis_store\timeline_analysis.sqlite"
+$database = "C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite"
+$wideExport = "C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\exports\asui_122_timeline_analysis.csv"
 
 .\.venv\Scripts\python.exe scripts\timeline_store.py init `
   --database $database
@@ -165,10 +166,16 @@ $database = "C:\Users\NicholasSisco\Documents\Site_timing_analysis_store\timelin
 .\.venv\Scripts\python.exe scripts\timeline_store.py export-wide `
   --database $database `
   --run-id "34314961-6763-4682-b400-6627ff459d37" `
-  --output "C:\Users\NicholasSisco\Documents\Site_timing_analysis_store\exports\asui_122_timeline_analysis.csv"
+  --output $wideExport
 
 .\.venv\Scripts\python.exe scripts\timeline_store.py list-runs `
   --database $database
+
+.\.venv\Scripts\python.exe scripts\relocate_timeline_store.py verify `
+  --database $database `
+  --output $wideExport `
+  --run-id "34314961-6763-4682-b400-6627ff459d37" `
+  --require-pinned
 ```
 
 The database argument is always required. The store rejects locations inside
@@ -182,6 +189,15 @@ datetimes and their provenance remain queryable; `export-wide` applies only the
 public boundary formatting: clock-only `h:mm:ss AM/PM` endpoints and one-decimal
 state minutes. Imported wide rows are retained as parity snapshots, not as the
 calculation source. Keep the clinical-derived store and its exports outside Git.
+
+The path above is the sole operational store. Writable connections use SQLite
+`DELETE` journaling, full synchronization, a bounded busy timeout, and an
+immediate write transaction. This workstation is the only writer; synchronized
+copies on other computers must remain closed or read-only. Keep the database
+available locally through OneDrive's **Always keep on this device** setting.
+OneDrive synchronization must be stopped during any future store relocation;
+use `scripts/relocate_timeline_store.py migrate --help` for the explicit,
+non-overwriting migration interface.
 
 ### Read-Only Site Availability and Case Parity
 
@@ -520,6 +536,7 @@ For quick CLI smoke checks:
 .\.venv\Scripts\python.exe scripts\run_timeline_analysis.py --help
 .\.venv\Scripts\python.exe scripts\build_timing_gantt_deliverables.py --help
 .\.venv\Scripts\python.exe scripts\timeline_store.py --help
+.\.venv\Scripts\python.exe scripts\relocate_timeline_store.py --help
 ```
 
 See `SESSION.md` for the latest known validation status and any currently

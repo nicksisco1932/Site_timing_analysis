@@ -10,7 +10,9 @@ TODO #6 is in progress. Phase 1 now provides an explicit, versioned cross-site
 SQLite store that imports validated Timeline Analysis run artifacts and exports
 the 20-column wide result from detailed SQL-backed intervals. The nine-case ASUI
 run passed live import, idempotency, source-preservation, and export-parity
-acceptance. Cache integration and broader SQL-native reporting remain open.
+acceptance. The sole operational store is now locally pinned under the Profound
+Medical OneDrive `Documents\10_Databases` directory. Cache integration and
+broader SQL-native reporting remain open.
 
 ## Governing Files
 
@@ -70,6 +72,10 @@ acceptance. Cache integration and broader SQL-native reporting remain open.
   status, full endpoint provenance, canonical state-labeled events, unrounded
   detailed intervals, imported wide snapshots, validations, and reconciliation
   results. Imports are prevalidated and atomic; exact reimports are no-ops.
+- Added rollback-safe store relocation and verification tooling. Writable store
+  connections now use `DELETE` journaling, full synchronization, bounded lock
+  waiting, and immediate write transactions. One workstation is the only
+  permitted writer to the OneDrive-synchronized canonical store.
 
 ### Not Yet Implemented
 
@@ -125,6 +131,10 @@ approved.
   clinical-derived store implicitly, and reject database destinations inside
   Git or the imported run directory. Detailed intervals remain authoritative;
   wide snapshots are parity evidence only.
+- Keep the sole operational store at
+  `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite`.
+  It must remain pinned locally. This workstation is the only writer; other
+  synchronized copies remain closed or read-only.
 
 ## Known Issues
 
@@ -195,13 +205,16 @@ approved.
   `TDC Sessions`, `19` remote canonical cases, `19` local canonical cases, and
   `19` complete matches. The checker reported one remote and two local
   noncanonical folders separately and performed no acquisition or report write.
-- Durable-store focused regression: `15 passed`, covering schema/checksum
+- Durable-store focused regression: `20 passed`, covering schema/checksum
   reopening, complete and partial imports, raw payload round-trip, exact export
   formatting, idempotency, historical versioning, hard conflicts, invalid
-  artifacts, atomic rollback, and destination rejection.
-- Full repository suite after TODO #6 phase 1: `186 passed` in `67.46s`.
-  All four store subcommand help checks pass, `pip check` reports no broken
-  requirements, and `git diff --check` reports no whitespace errors.
+  artifacts, atomic rollback, deterministic logical hashing, safe relocation,
+  destination conflicts, and cleanup boundaries.
+- Full repository suite after store relocation changes: `191 passed` in
+  `41.92s`.
+  All four core store and both relocation subcommand help checks pass;
+  `pip check` reports no broken requirements and `git diff --check` reports no
+  whitespace errors.
 - Live ASUI store acceptance imported 9 run cases, 1,226 canonical events,
   1,226 detailed intervals, and 45 reconciliation rows. A second identical
   import inserted zero analyses/events/intervals. SQLite integrity is `ok`,
@@ -209,9 +222,27 @@ approved.
   sizes, and modification times match their imported observations.
 - The external SQL export contains 9 rows and the exact 20 headers. All values
   match the historical ASUI deliverable after normalizing only that older
-  file's full-ISO endpoint cells to the current clock-only contract. Store and
-  export paths are under
-  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_store`, outside Git.
+  file's full-ISO endpoint cells to the current clock-only contract.
+- Live relocation moved the sole store to
+  `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite`
+  and the export to its `exports` child. Source and destination logical hashes
+  both equal `E3B7C2E18FA665FCE7A609F0A113F8BF2D0E6E08899E5070AF8B8603B8DB2671`;
+  the retired source database was
+  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_store\timeline_analysis.sqlite`
+  (3,817,472 bytes; SHA-256
+  `E46848E09EB325F91B3A3BDBB0D0F9CE0FAFF5FB6B4CA3FF1C131A8750DDD60E`),
+  and its export was the matching `exports\asui_122_timeline_analysis.csv`;
+  the final database SHA-256 is
+  `C4E80B2B5252A91013C8AE4C51E2891D0435B347F919BE6964DA283CBCC502FB`
+  and the export SHA-256 is
+  `29014619BE1DE382644B6223A64C2AED0A352A027BE8F84B67E0FC2775CFE984`.
+- Post-resume validation reports SQLite integrity `ok`, zero foreign-key
+  issues, schema version 1, migration checksum
+  `A41C29685F102EB83EC13513C71F1094785AD574D6EE021DFCCFE0DD4FB6E42D`,
+  `DELETE` journaling, no WAL/SHM or migration files, and a fully local pinned
+  database directory, database, export directory, and export after OneDrive
+  resumed. The old database, sidecars, export, and empty directories were
+  removed explicitly; no unrelated paths were deleted.
 - `pip check` reports no broken requirements.
 - `git diff --check` reports no whitespace errors; Git only reports normal
   Windows LF/CRLF conversion warnings.

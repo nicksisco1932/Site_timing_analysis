@@ -543,13 +543,21 @@ def _migration_checksum() -> str:
 
 def _open_database(path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     if read_only:
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(
+            f"file:{path.as_posix()}?mode=ro", uri=True, timeout=30.0
+        )
     else:
-        connection = sqlite3.connect(path)
+        connection = sqlite3.connect(path, timeout=30.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 30000")
     if not read_only:
-        connection.execute("PRAGMA journal_mode = WAL")
+        journal_mode = str(connection.execute("PRAGMA journal_mode = DELETE").fetchone()[0])
+        if journal_mode.casefold() != "delete":
+            connection.close()
+            raise AnalyticalStoreError(
+                f"Could not establish DELETE journaling for analytical store: {path}"
+            )
         connection.execute("PRAGMA synchronous = FULL")
     return connection
 

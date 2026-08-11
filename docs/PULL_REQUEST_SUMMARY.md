@@ -35,6 +35,14 @@ execution.
   manifest. It checkpoints a durable inventory, isolates case failures,
   supports safe reruns and optional exact-hash adoption, and requires staging,
   quarantine, and reports to use a backend outside the clean case destination.
+- Added the versioned Timeline Analysis analytical store and relocated its sole
+  operational database and SQL-backed ASUI export to the locally pinned
+  Profound Medical OneDrive `Documents\10_Databases` directory. Writable store
+  connections use `DELETE` journaling, full synchronization, bounded lock
+  waiting, and immediate transactions under a single-writer workstation rule.
+- Added rollback-safe store relocation and verification tooling using SQLite's
+  backup API, deterministic logical-content hashing, staged non-overwriting
+  publication, explicit cleanup boundaries, and Windows pinned/local checks.
 - Removed committed Python bytecode, two duplicate clinical-derived SQLite
   fixtures, and their tracked generated CSV/PNG validation outputs. Integration
   tests now create a deterministic, minimal, non-clinical SQLite fixture at run
@@ -61,7 +69,8 @@ execution.
 
 ## Validation
 
-- Full pytest suite after the bulk acquisition slice: `153 passed`.
+- Full pytest suite after the analytical-store relocation slice: `191 passed`.
+- Focused analytical-store and relocation regression: `20 passed`.
 - Focused single-, multi-, and bulk-acquisition regression: `39 passed`.
 - Synthetic SQLite pipeline regression: `3 passed`.
 - CLI help checks passed for the staged pipeline, validated wide exporter,
@@ -82,6 +91,11 @@ execution.
   zero mismatches across those source paths during this housekeeping pass.
 - No source clinical database, raw workbook, profiling output, or generated
   timeline output is included in the proposed source-control changes.
+- The canonical store passed SQLite integrity and foreign-key checks with one
+  published ASUI run, 9 run cases, 9 analyses, 1,226 canonical events, 1,226
+  intervals, and 45 reconciliation rows. Its database directory, database,
+  export directory, and export remain locally pinned after OneDrive resumed;
+  no WAL, SHM, or migration files remain.
 - Live acceptance case `122_01-001` passed immutable read-only SQLite integrity,
   schema, relationship, size, SHA-256, report-sanitization, and post-download
   source-presence checks. Its database and report were written outside Git.
@@ -98,8 +112,8 @@ execution.
 - The current Stanford run contains 148 processed cases and one pre-ingestion
   quarantine (`064_01-039`, no usable database candidate); it was explicitly
   published as partial and is not a complete 149-case deliverable.
-- Formal R-output parity, a durable analytical database, and further measured
-  optimization remain separate follow-up work in `TODO.md`.
+- Pipeline cache lookup/reuse, broader SQL-native comparisons, formal R-output
+  parity, and further measured optimization remain follow-up work in `TODO.md`.
 - The dependency-gated five-case validation in TODO #3 is complete for explicit
   cases `122_01-001` through `122_01-005`: all five passed independent database,
   identity, destination, reporting, and source-metadata checks.
