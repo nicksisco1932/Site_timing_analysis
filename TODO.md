@@ -376,15 +376,18 @@ Completion evidence:
   noncanonical folders were reported and excluded as designed.
 - Full repository suite: `171 passed`. CLI help and Python compilation pass.
 
-## 6. Create a durable analytical database
+## 6. Create a durable analytical database — In progress
+
+**Status:** Phase 1 completed 2026-08-11. Pipeline cache reuse and broader
+SQL-native reporting/comparison work remain open under this item.
 
 **Rationale:** Parsing every source database for every report is slow and makes
 historical comparison harder. A separate analytical store would make ingestion
 repeatable while preserving complete provenance and prior results.
 
-Design and implement a separate SQLite database for Timeline Analysis so cases
-are parsed once and timing results can be appended and queried historically.
-The design must preserve:
+The phase-1 implementation adds an explicit, cross-site SQLite store so
+validated run artifacts can be imported once and queried historically. It
+preserves:
 
 - source case identity and provenance;
 - site and case ID;
@@ -405,17 +408,39 @@ Requirements:
   parser version must not silently duplicate records.
 - Preserve prior analysis runs when the parser or source data changes.
 - Treat detailed state intervals as the analytical source of truth.
-- Generate CSVs, reports, comparisons, and future dashboards from SQL views or
-  exports instead of repeatedly rereading every source database.
-- Define a practical migration and validation plan before implementation.
+- Generate the 20-column wide CSV from SQL interval views without rereading the
+  source database.
 - Keep the analytical database outside Git if it contains generated or
   clinical-derived data.
 
-**Completion criteria:** An approved schema and migration plan exist; source,
-parser, case, run, event, interval, result, and validation provenance are
-queryable; idempotency and historical-version tests pass; SQL exports reproduce
-validated reference outputs; and clinical-derived database files are excluded
-from Git.
+Phase 1 completion evidence:
+
+- Added schema version 1, checksummed transactional migration, foreign-key
+  enforcement, content-addressed source/parser/configuration history, canonical
+  events, unrounded intervals, run cases, wide snapshots, reconciliation and
+  validation records, and four SQL views.
+- Added explicit `init`, `import-run`, `export-wide`, and `list-runs` commands in
+  `scripts/timeline_store.py`. Store paths inside Git or the imported run are
+  rejected.
+- Synthetic store regression covers complete and partial runs, raw payload
+  round-trip, exact export formatting, idempotency, historical versions,
+  conflicts, invalid artifacts, rollback, and destination safety.
+- Live ASUI import stored 9 run cases, 1,226 canonical events, 1,226 detailed
+  intervals, and 45 reconciliation rows. An identical second import added zero
+  records. SQLite integrity, foreign keys, and all nine source hash/size/mtime
+  comparisons passed.
+- The SQL export has the exact 20-column contract and matches the historical
+  ASUI values after converting its older full-ISO endpoint cells to the current
+  clock-only format. The store and export are outside Git under
+  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_store`.
+
+Remaining completion criteria:
+
+- Integrate an explicit cache lookup/reuse path into Timeline Analysis without
+  weakening discovery, source identity, validation, or publication gates.
+- Generate broader reports and site comparisons from stable SQL views/exports.
+- Validate cache invalidation across multiple sites and changed source, parser,
+  and configuration fingerprints before marking TODO #6 complete.
 
 ## 7. Profile and optimize the pipeline
 

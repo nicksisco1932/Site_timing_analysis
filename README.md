@@ -147,6 +147,42 @@ published layout is intentionally compact:
 For ASUI_122, omitting `--case-list` uses the built-in nine-case allowlist. The
 existing ASUI roll-up can be supplied with `--rollup` for reconciliation.
 
+### Durable Timeline Analysis Store
+
+Import validated run artifacts into the versioned cross-site SQLite store, then
+recreate the public wide CSV from unrounded SQL-backed interval totals:
+
+```powershell
+$database = "C:\Users\NicholasSisco\Documents\Site_timing_analysis_store\timeline_analysis.sqlite"
+
+.\.venv\Scripts\python.exe scripts\timeline_store.py init `
+  --database $database
+
+.\.venv\Scripts\python.exe scripts\timeline_store.py import-run `
+  --database $database `
+  --run-dir ".\outputs\timing_gantt\2026.08.10_ASUI_122_timing_Gantt"
+
+.\.venv\Scripts\python.exe scripts\timeline_store.py export-wide `
+  --database $database `
+  --run-id "34314961-6763-4682-b400-6627ff459d37" `
+  --output "C:\Users\NicholasSisco\Documents\Site_timing_analysis_store\exports\asui_122_timeline_analysis.csv"
+
+.\.venv\Scripts\python.exe scripts\timeline_store.py list-runs `
+  --database $database
+```
+
+The database argument is always required. The store rejects locations inside
+this repository or the imported run directory. Import validates the complete
+artifact set before opening a write transaction, hashes source databases using
+read-only file access, preserves failed cases from partial runs, and rejects a
+reused run ID whose content changed. Reimporting identical content is a no-op.
+
+Detailed state intervals are the analytical source of truth. Full ISO endpoint
+datetimes and their provenance remain queryable; `export-wide` applies only the
+public boundary formatting: clock-only `h:mm:ss AM/PM` endpoints and one-decimal
+state minutes. Imported wide rows are retained as parity snapshots, not as the
+calculation source. Keep the clinical-derived store and its exports outside Git.
+
 ### Read-Only Site Availability and Case Parity
 
 Before acquiring or analyzing a new site, check its configured Sync.com share
@@ -483,6 +519,7 @@ For quick CLI smoke checks:
 .\.venv\Scripts\python.exe -m site_timing_analysis.first_slice_cli --help
 .\.venv\Scripts\python.exe scripts\run_timeline_analysis.py --help
 .\.venv\Scripts\python.exe scripts\build_timing_gantt_deliverables.py --help
+.\.venv\Scripts\python.exe scripts\timeline_store.py --help
 ```
 
 See `SESSION.md` for the latest known validation status and any currently

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-08-11 - Durable Timeline Analysis Store Phase 1
+
+- Added a schema-versioned, cross-site SQLite analytical store with checksummed
+  transactional migration, enforced foreign keys, immutable historical source,
+  parser, configuration, run, case, event, interval, validation, reconciliation,
+  and endpoint-provenance records.
+- Added explicit `init`, `import-run`, `export-wide`, and `list-runs` commands.
+  Imports validate complete published artifacts before the write transaction;
+  identical reimports are no-ops and changed content under one run ID is a hard
+  conflict.
+- Added SQL views for unrounded state totals, latest case-analysis versions,
+  run status, and the 20-column wide timing contract. Final export alone applies
+  clock-only endpoint formatting and one-decimal state rounding.
+- Live ASUI acceptance imported 9 cases, 1,226 canonical events, 1,226 detailed
+  intervals, and 45 reconciliation rows. The second import added zero records;
+  SQLite integrity, foreign keys, source metadata/hash preservation, and
+  normalized historical CSV parity passed.
+- Kept the clinical-derived store and SQL export outside Git. Cache integration
+  and broader SQL-native reporting remain TODO #6 follow-up work.
+
 ## 2026-08-11 - Validated Single-Case Acquisition
 
 - Added a site-ID-only, read-only availability and case-parity CLI for comparing

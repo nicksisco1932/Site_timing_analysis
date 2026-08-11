@@ -6,11 +6,11 @@ Site Timing Analysis (legacy R workflow migrated to a staged Python pipeline)
 
 ## Current Objective
 
-TODO #5 is complete. The site-ID-only availability command now compares
-configured Sync.com folder metadata with Teams-synced local case artifacts
-without acquiring or modifying data. Live site-122 acceptance found complete
-canonical parity across 19 cases. The next planned slice is TODO #6, the durable
-analytical database design and migration plan.
+TODO #6 is in progress. Phase 1 now provides an explicit, versioned cross-site
+SQLite store that imports validated Timeline Analysis run artifacts and exports
+the 20-column wide result from detailed SQL-backed intervals. The nine-case ASUI
+run passed live import, idempotency, source-preservation, and export-parity
+acceptance. Cache integration and broader SQL-native reporting remain open.
 
 ## Governing Files
 
@@ -65,18 +65,25 @@ analytical database design and migration plan.
   exact canonical case/database placement, excludes but reports noncanonical
   folders, prints actionable differences, and optionally writes sanitized JSON
   outside the Teams-synced tree.
+- Added the phase-1 durable analytical store and `scripts/timeline_store.py`
+  CLI. Schema v1 records source/parser/configuration history, run and case
+  status, full endpoint provenance, canonical state-labeled events, unrounded
+  detailed intervals, imported wide snapshots, validations, and reconciliation
+  results. Imports are prevalidated and atomic; exact reimports are no-ops.
 
 ### Not Yet Implemented
 
 - Full formal parity diffing against historical R outputs.
 - `.xlsx` timing-log enrichment.
 - Broader multi-site curated-store/catalog workflow.
+- Timeline Analysis cache lookup/reuse and broader SQL-native reports and
+  comparisons from the phase-1 store.
 
 ## Current Blocker
 
-No blocker is active for TODO #4. Three ASUI_122 pre-existing databases were
-intentionally reported as local-only skips; their remote-content equivalence was
-not asserted, exactly as required by the current operational rule.
+No blocker is active. TODO #6 remains intentionally in progress because its
+cache-integration and broader reporting phase has not yet been designed or
+approved.
 
 ## Data Governance
 
@@ -114,6 +121,10 @@ not asserted, exactly as required by the current operational rule.
 - Site availability is inventory-only: remote `listdir` calls and local metadata
   reads are permitted, while download, extraction, database inspection, staging,
   and source modification remain outside that command.
+- Keep durable-store writes explicit and post-run. Never create a
+  clinical-derived store implicitly, and reject database destinations inside
+  Git or the imported run directory. Detailed intervals remain authoritative;
+  wide snapshots are parity evidence only.
 
 ## Known Issues
 
@@ -184,6 +195,20 @@ not asserted, exactly as required by the current operational rule.
   `TDC Sessions`, `19` remote canonical cases, `19` local canonical cases, and
   `19` complete matches. The checker reported one remote and two local
   noncanonical folders separately and performed no acquisition or report write.
+- Durable-store focused regression: `13 passed`, covering schema/checksum
+  reopening, complete and partial imports, raw payload round-trip, exact export
+  formatting, idempotency, historical versioning, hard conflicts, invalid
+  artifacts, atomic rollback, and destination rejection.
+- Live ASUI store acceptance imported 9 run cases, 1,226 canonical events,
+  1,226 detailed intervals, and 45 reconciliation rows. A second identical
+  import inserted zero analyses/events/intervals. SQLite integrity is `ok`,
+  foreign-key checks report zero issues, and all nine current source hashes,
+  sizes, and modification times match their imported observations.
+- The external SQL export contains 9 rows and the exact 20 headers. All values
+  match the historical ASUI deliverable after normalizing only that older
+  file's full-ISO endpoint cells to the current clock-only contract. Store and
+  export paths are under
+  `C:\Users\NicholasSisco\Documents\Site_timing_analysis_store`, outside Git.
 - `pip check` reports no broken requirements.
 - `git diff --check` reports no whitespace errors; Git only reports normal
   Windows LF/CRLF conversion warnings.
@@ -194,8 +219,8 @@ not asserted, exactly as required by the current operational rule.
 
 ## Next Recommended Step
 
-Begin TODO #6 with an approved durable analytical database schema, migration
-plan, and validation strategy before implementation.
+Design the next TODO #6 phase: explicit cache lookup/reuse in Timeline Analysis,
+followed by broader reports and comparisons generated from stable SQL views.
 
 ## Resume Instructions
 
@@ -207,5 +232,6 @@ plan, and validation strategy before implementation.
    existing-file-awareness contracts for future sites.
 6. Treat TODO #5 as complete and preserve its inventory-only, sanitized-output,
    and no-`applog` contracts.
-7. Continue with TODO #6, the durable analytical database design and migration
-   plan; profiling and optimization remain TODO #7.
+7. Treat TODO #6 phase 1 as complete but the parent item as in progress.
+   Continue with cache integration and broader SQL-native reporting only after
+   their interface and invalidation rules are approved; profiling remains #7.

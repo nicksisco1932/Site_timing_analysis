@@ -70,6 +70,18 @@ explicit three-digit site ID
   -> console and optional sanitized JSON (no acquisition or database reads)
 ```
 
+The durable analytical store is a post-pipeline consumer and does not alter
+pipeline execution or publication gates:
+
+```text
+validated Backend/ + Report/ run artifacts
+  -> analytical_store.py complete pre-transaction validation
+  -> explicit cross-site SQLite import with source/parser/config history
+  -> canonical events + unrounded detailed intervals as analytical truth
+  -> SQL views for state totals, latest versions, run status, and wide timing
+  -> clock-formatted, one-decimal 20-column CSV at the export boundary
+```
+
 `first_slice_cli.py` is the staged-pipeline orchestrator. It coordinates the
 flow above and records run-level, case-level, and artifact-level status without
 embedding the implementation of each stage.
@@ -125,6 +137,15 @@ embedding the implementation of each stage.
   hierarchy and direct `local.db` metadata, and reports canonical case parity.
   It uses remote listing and local filesystem metadata only; it does not call
   download, extraction, SQLite, staging, or source-write paths.
+- `analytical_store.py` owns schema migrations and the explicit post-run
+  `init`, `import-run`, `export-wide`, and `list-runs` operations. Schema v1
+  stores parser provenance, source observations, run/case status, full endpoint
+  provenance, state-labeled canonical events, detailed intervals, imported wide
+  snapshots, validation, and reconciliation history. It validates all run
+  artifacts and source metadata before a transaction, reuses only an identical
+  source/parser/configuration case analysis, and rejects deterministic conflicts
+  or changed content under an existing run ID. It does not participate in live
+  pipeline parsing or acquisition.
 
 ## Legacy Compatibility Surface
 
@@ -145,10 +166,13 @@ or normalization modules.
   canonical layout in `output_layout.py`.
 - Case/site identifiers and provenance fields must remain attributable through
   every downstream export.
+- Clinical-derived analytical stores and their exports must use an explicit
+  path outside both the repository and imported run directories.
 
 ## Deferred Work
 
 - Formal parity diffing against historical R outputs.
-- Broader multi-site curated storage and catalog support.
+- Pipeline cache lookup/reuse and broader SQL-native reports/comparisons on top
+  of the phase-1 analytical store.
 - Splitting large compatibility/reporting modules after interface behavior is
   stabilized and covered by the test suite.
