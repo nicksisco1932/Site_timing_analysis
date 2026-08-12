@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-08-11 - Guided Handoff and Verified Preflight Reuse
+
+- Added a hybrid Windows initializer: a PowerShell environment bootstrap plus a
+  testable Python wizard that resolves one Teams-synced site read-only, previews
+  all-or-manifest case selection, and generates a versioned secret-free profile
+  and collision-safe reusable runner under Local AppData.
+- Corrected fresh-environment discovery to accept any verified Python 3.12+
+  interpreter instead of requiring `py -3.12`. A disposable local clone using
+  Python 3.13 installed all declared dependencies and published identical
+  one-row, 20-column CSVs to the base and `_2` collision-safe run directories.
+- Added explicit `--select-all-canonical` and
+  `--allow-unselected-canonical` compatibility options for generated runners.
+  Existing strict discovery behavior and the ASUI nine-case default remain
+  unchanged when the options are absent.
+- Added external reusable preflight snapshots with live execution still the
+  default. Reuse requires fresh, passing evidence and exact Git commit/dirty
+  contents, interpreter path/version/binary, dependency, and test-command
+  fingerprints; stale or mismatched snapshots abort safely.
+- A synthetic one-case fresh-user acceptance published the expected 20-column
+  CSV without hand-editing a runner. Its clean-clone preflight passed all 229
+  tests present in that disposable clone snapshot.
+- Made subprocess evidence independent of the Windows console code page by
+  hashing raw stdout/stderr bytes and rendering UTF-8 with explicit replacement;
+  the final reusable snapshot gate passed 230 tests with an exact dirty-diff
+  fingerprint.
+- Three live and three reuse benchmarks on the same four UCLA cases reduced
+  median wall time from `20.970s` to `4.188s` (`-80.03%`) while all 20 required
+  public/event/interval/plot/reconciliation artifacts remained byte-identical.
+
 ## 2026-08-11 - Durable Timeline Analysis Store Phase 2
 
 - Added a validated schema-v2 copy-up migration that records exact clinical

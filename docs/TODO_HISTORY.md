@@ -128,3 +128,49 @@ modification times were unchanged. SQL `export-long`, `compare-runs`,
 the ASUI comparison contained 135 zero-difference rows. The canonical store
 remained integrity-clean, foreign-key-clean, pinned, and free of WAL/SHM files
 after OneDrive resumed.
+
+## 7. Guided handoff and pipeline initialization â€” Completed 2026-08-11
+
+`scripts/initialize_timeline_analysis.ps1` validates the Windows/PowerShell
+runtime, plans or creates the repository `.venv`, and installs declared
+dependencies only after confirmation. It delegates to a testable Python wizard
+that resolves exactly one Teams-synced site, inventories canonical case and
+database candidates read-only, previews all-or-manifest selection, and keeps
+cache off unless an explicit existing read-only store is supplied.
+
+Profiles and safely quoted runners are stored outside Git under Local AppData.
+They contain no credentials, Sync URLs, tokens, decryption keys, or copied
+clinical data. Generated runners use the repository `.venv`, current validated
+exporter, explicit site root/prefix, collision-safe dated outputs, exact exit
+propagation, and public CSV verification. Explicit all/subset selection flags
+were added without changing the exporter's strict default behavior or ASUI
+compatibility allowlist.
+
+Seventeen focused tests passed. A disposable local clone with no `.venv`
+detected Python 3.13 under the 3.12+ rule, installed every declared dependency,
+and passed all 229 tests present in its clean-clone snapshot. A one-case invented SQLite
+acceptance exercised the generated runner twice and published hash-identical,
+one-row, 20-column CSVs in the base and `_2` collision-safe run directories.
+Acquisition and analytical-store writes remained outside onboarding.
+
+## 8. Pipeline profiling and optimization â€” Completed 2026-08-11
+
+`scripts/preflight_baseline.py` captures reusable live gate evidence at an
+explicit path outside Git. `scripts/run_timeline_analysis.py` retains live
+preflight by default and accepts reuse only when the snapshot is fresh, all
+required gates passed, and repository path, Git commit plus dirty contents,
+interpreter path/version/binary, dependencies, and test-command contract match
+exactly. Reuse evidence remains fully attributable in each run's backend
+report; stale or mismatched snapshots abort.
+
+Thirteen focused preflight tests passed, and the final external snapshot gate
+reported `230 passed`. Raw subprocess bytes are hashed before UTF-8 rendering,
+so Git-diff identity is independent of the Windows console code page. On three
+live and three verified-reuse runs of fixed UCLA cases
+`008_01-201`, `008_01-202`, `008_01-206`, and `008_01-207`, median total wall
+time fell from `20.970s` to `4.188s` (`-80.03%`). Median process CPU changed
+`-17.35%` while the non-CPU wall proxy changed `-90.84%`, confirming that the
+gain came primarily from avoiding repeated test subprocess/I/O work. Timing
+coverage remained above `99.986%`; all 20 required public, event, interval,
+plot, and reconciliation artifacts were byte-identical. Detailed evidence is
+in `docs/PREFLIGHT_BASELINE_BENCHMARK_2026-08-11.md`.

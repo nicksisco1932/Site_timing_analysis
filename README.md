@@ -75,6 +75,43 @@ After `.venv` exists, use explicit repo-local executables for all Python work:
 Do not rely on an activated shell, and do not use bare `python`, `pip`, or
 `pytest` commands when working in this repository.
 
+## First-time setup and handoff
+
+On Windows, the guided initializer can create the repository `.venv`, install
+declared dependencies after confirmation, validate the command-line tools, and
+generate a reusable site runner without editing a script:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  ".\scripts\initialize_timeline_analysis.ps1"
+```
+
+When `.venv` is absent, the bootstrap detects an available Python 3.12 or newer
+interpreter; it does not require an exact Python 3.12 launcher registration and
+never installs system Python or Git. Its checks cover the staged pipeline,
+validated exporter, deliverable builder, analytical-store CLI, `pip check`, and
+an optional full test suite.
+
+The wizard asks for a three-digit site ID, finds exactly one Teams-synced site
+directory under `%USERPROFILE%\Profound Medical`, inventories its canonical
+case/database candidates read-only, and previews the selection. It can select
+all canonical cases or an explicit case-list manifest. Optional roll-up and
+read-only cache paths may be supplied; cache defaults to off and the wizard
+never writes an analytical store.
+
+Profiles and generated runners are per-user files outside Git:
+
+```text
+%LOCALAPPDATA%\Profound Medical\SiteTimingAnalysis\
+|-- profiles\<site-code>.json
+`-- runners\run_<site-code>.ps1
+```
+
+The generated runner creates a fresh collision-safe dated run directory each
+time and prints the exact public CSV path. Sync.com credentials and acquisition
+are intentionally separate; if local cases are missing, use the availability
+and acquisition commands after completing this local analysis-first setup.
+
 ## CLI Usage
 
 ### Staged Timing Pipeline
@@ -119,9 +156,14 @@ wide CSV row per case with the operational-state columns:
 ```
 
 Without `--case-list`, all discovered folders matching `--canonical-prefix` are
-selected. Use `--case-list` for an explicit allowlist; it accepts case IDs or
+selected, except that ASUI_122 retains its built-in nine-case compatibility
+allowlist. Use explicit `--select-all-canonical` to override that compatibility
+default. Use `--case-list` for an explicit allowlist; it accepts case IDs or
 full case-folder paths, one per line. Non-directory lines and noncanonical
-folders are reported and excluded. Add `--rollup <path>` when a five-phase
+folders are reported and excluded. The strict default treats additional
+canonical folders as an abort condition; guided subset runners explicitly add
+`--allow-unselected-canonical` so unselected canonical cases are reported as
+excluded. Add `--rollup <path>` when a five-phase
 roll-up comparator is available. The discovery count summary is calculated from
 the folders found at runtime. The run gates on unique case IDs, valid
 canonical-prefix selection, complete discovered-folder accounting, exactly one
@@ -146,6 +188,33 @@ published layout is intentionally compact:
 
 For ASUI_122, omitting `--case-list` uses the built-in nine-case allowlist. The
 existing ASUI roll-up can be supplied with `--rollup` for reconciliation.
+
+### Reusable preflight evidence
+
+Every validated run performs the full live repository preflight by default. An
+operator may capture that evidence once at an explicit path outside Git and
+reuse it only while the execution identity remains exact:
+
+```powershell
+$snapshot = "$env:LOCALAPPDATA\Profound Medical\SiteTimingAnalysis\preflight\baseline.json"
+
+.\.venv\Scripts\python.exe scripts\preflight_baseline.py capture `
+  --output $snapshot
+
+.\.venv\Scripts\python.exe scripts\run_timeline_analysis.py `
+  --site "UCLA_008" `
+  --site-root "C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - UCLA_008" `
+  --canonical-prefix "008_" `
+  --baseline-mode reuse `
+  --baseline-snapshot $snapshot `
+  --run-dir ".\outputs\timing_gantt\<fresh-run-directory>"
+```
+
+Reuse defaults to a 24-hour maximum age and requires exact Git commit and dirty
+contents, interpreter path/version/binary, installed dependencies, test command,
+and successful gate results. A stale or mismatched snapshot aborts the run; it
+is never silently accepted or refreshed. Each run retains the original evidence
+plus reuse validation details in `Backend/reports/pre_execution_baseline.json`.
 
 ### Durable Timeline Analysis Store
 
@@ -593,6 +662,8 @@ For quick CLI smoke checks:
 .\.venv\Scripts\python.exe scripts\timeline_store.py compare-runs --help
 .\.venv\Scripts\python.exe scripts\timeline_store.py summarize-runs --help
 .\.venv\Scripts\python.exe scripts\relocate_timeline_store.py --help
+.\.venv\Scripts\python.exe scripts\initialize_timeline_analysis.py --help
+.\.venv\Scripts\python.exe scripts\preflight_baseline.py --help
 ```
 
 See `SESSION.md` for the latest known validation status and any currently

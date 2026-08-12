@@ -1,0 +1,19 @@
+# Project: Site Timing Analysis
+# File: scripts/preflight_baseline.py
+# Primary author: Nicholas J. Sisco, Ph.D.
+# Organization: Profound Medical, LLC
+# Created: 2026-08-11
+# Purpose: Provides the repository-local CLI for reusable Timeline Analysis preflight evidence.
+#
+# Provenance: Original implementation or material contribution by
+# Nicholas J. Sisco, Ph.D. for Profound Medical, LLC.
+#
+# Rights status: Proprietary / internal use unless otherwise specified
+# by Profound Medical, LLC.
+from __future__ import annotations
+
+from site_timing_analysis.preflight_baseline import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

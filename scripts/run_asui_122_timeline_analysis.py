@@ -27,7 +27,6 @@ import math
 from pathlib import Path
 import shutil
 import sqlite3
-import subprocess
 import sys
 import zipfile
 from typing import Any, Iterable
@@ -44,6 +43,11 @@ from site_timing_analysis.discovery import discover_cases  # noqa: E402
 from site_timing_analysis.first_slice_cli import run_first_slice  # noqa: E402
 from site_timing_analysis.output_layout import output_layout  # noqa: E402
 from site_timing_analysis.profiling import PerformanceProfiler  # noqa: E402
+from site_timing_analysis.preflight_baseline import (  # noqa: E402
+    DEFAULT_MAX_AGE_HOURS,
+    capture_baseline,
+    load_reusable_baseline,
+)
 from site_timing_analysis.timeline_cache import TimelineCacheReader  # noqa: E402
 from site_timing_analysis.timing_gantt_deliverables import (  # noqa: E402
     PHASE_ORDER,
@@ -106,9 +110,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Newline-delimited case IDs or full case-folder paths. Non-case lines are reported and excluded.",
     )
+    parser.add_argument(
+        "--select-all-canonical",
+        action="store_true",
+        help=(
+            "Select every currently discovered canonical case folder. This explicit option "
+            "overrides the ASUI_122 compatibility allowlist without changing the default."
+        ),
+    )
     parser.add_argument("--run-dir", default=None, help="Run output directory. Defaults to dated site output.")
     parser.add_argument("--rollup", default=None, help="Optional five-phase roll-up comparator CSV.")
     parser.add_argument("--canonical-prefix", default=None, help="Canonical folder prefix, e.g. 064_.")
+    parser.add_argument(
+        "--allow-unselected-canonical",
+        action="store_true",
+        help=(
+            "Allow an explicit --case-list to select a canonical subset while reporting "
+            "other canonical folders as excluded. The default strict unexpected-folder gate is unchanged."
+        ),
+    )
     parser.add_argument(
         "--publish-partial",
         action="store_true",
@@ -130,11 +150,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="off",
         help="Opt-in exact analytical-store cache lookup. Default: off.",
     )
+    parser.add_argument(
+        "--baseline-mode",
+        choices=("live", "reuse"),
+        default="live",
+        help="Run the live preflight by default, or explicitly reuse an exact verified snapshot.",
+    )
+    parser.add_argument(
+        "--baseline-snapshot",
+        default=None,
+        help="Explicit reusable baseline JSON path; required only with --baseline-mode=reuse.",
+    )
+    parser.add_argument(
+        "--baseline-max-age-hours",
+        type=float,
+        default=DEFAULT_MAX_AGE_HOURS,
+        help=f"Maximum reusable snapshot age in hours. Default: {DEFAULT_MAX_AGE_HOURS:g}.",
+    )
     args = parser.parse_args(argv)
+    if args.select_all_canonical and args.case_list:
+        parser.error("--select-all-canonical cannot be combined with --case-list")
     if args.cache_mode == "read-only" and not args.database:
         parser.error("--database is required when --cache-mode=read-only")
     if args.database and args.cache_mode == "off":
         parser.error("--database requires --cache-mode=read-only")
+    if args.baseline_mode == "reuse" and not args.baseline_snapshot:
+        parser.error("--baseline-snapshot is required when --baseline-mode=reuse")
+    if args.baseline_mode == "live" and args.baseline_snapshot:
+        parser.error("--baseline-snapshot requires --baseline-mode=reuse")
+    if args.baseline_max_age_hours <= 0:
+        parser.error("--baseline-max-age-hours must be greater than zero")
     return args
 
 
@@ -173,46 +218,6 @@ def _backend_layout(run_dir: Path):
 
 def _public_report_dir(run_dir: Path) -> Path:
     return run_dir / "Report"
-
-
-def _run_command(args: list[str], *, cwd: Path) -> dict[str, Any]:
-    completed = subprocess.run(
-        args,
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return {
-        "command": args,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-    }
-
-
-def capture_baseline(*, basetemp: Path) -> dict[str, Any]:
-    python_exe = str(Path(sys.executable).resolve())
-    return {
-        "captured_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "python_executable": python_exe,
-        "git_branch": _run_command(["git", "branch", "--show-current"], cwd=REPO_ROOT),
-        "git_status": _run_command(["git", "status", "--short"], cwd=REPO_ROOT),
-        "git_diff_check": _run_command(["git", "diff", "--check"], cwd=REPO_ROOT),
-        "pytest": _run_command(
-            [
-                python_exe,
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:cacheprovider",
-                f"--basetemp={basetemp}",
-            ],
-            cwd=REPO_ROOT,
-        ),
-        "pip_check": _run_command([python_exe, "-m", "pip", "check"], cwd=REPO_ROOT),
-    }
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -300,10 +305,17 @@ def _state_mapping_validation() -> dict[str, Any]:
     return {"status": "PASS" if not failures else "FAIL", "details": details, "failures": failures}
 
 
-def _read_case_list(path: Path | None, site_root: Path, site_code: str, folders: list[Path]) -> dict[str, Any]:
+def _read_case_list(
+    path: Path | None,
+    site_root: Path,
+    site_code: str,
+    folders: list[Path],
+    *,
+    select_all_canonical: bool = False,
+) -> dict[str, Any]:
     """Resolve newline-delimited IDs or full folder paths into a selection request."""
     if path is None:
-        if site_code == DEFAULT_SITE_CODE:
+        if site_code == DEFAULT_SITE_CODE and not select_all_canonical:
             return {
                 "requested_case_ids": list(DEFAULT_ALLOWLIST),
                 "invalid_entries": [],
@@ -367,6 +379,8 @@ def _discover_and_select(
     site_code: str,
     case_list_path: Path | None,
     canonical_prefix: str | None,
+    allow_unselected_canonical: bool = False,
+    select_all_canonical: bool = False,
     performance_profiler: PerformanceProfiler | None = None,
 ) -> dict[str, Any]:
     if not site_root.is_dir():
@@ -380,7 +394,13 @@ def _discover_and_select(
         folder_names = [path.name for path in folders]
     selection_timer = _profile_stage(performance_profiler, "case selection")
     selection_timer.__enter__()
-    selection = _read_case_list(case_list_path, site_root, site_code, folders)
+    selection = _read_case_list(
+        case_list_path,
+        site_root,
+        site_code,
+        folders,
+        select_all_canonical=select_all_canonical,
+    )
     requested_ids = selection["requested_case_ids"]
     allowlist_set = set(requested_ids)
     if canonical_prefix is None:
@@ -393,12 +413,15 @@ def _discover_and_select(
         if path.name in allowlist_set and (not canonical_prefix or path.name.startswith(canonical_prefix))
     ]
     selected_names = {path.name for path in selected}
-    unexpected_canonical = sorted(
+    unselected_canonical = sorted(
         name for name in folder_names
         if canonical_prefix and name.startswith(canonical_prefix) and name not in selected_names
     )
+    unexpected_canonical = [] if allow_unselected_canonical else unselected_canonical
     quarantined_noncanonical = sorted(
-        name for name in folder_names if name not in selected_names and name not in unexpected_canonical
+        name
+        for name in folder_names
+        if name not in selected_names and name not in unselected_canonical
     )
     missing_allowlist = sorted(set(requested_ids).difference(folder_names))
 
@@ -410,6 +433,9 @@ def _discover_and_select(
         elif path.name in unexpected_canonical:
             category = "global_abort"
             reason = f"unexpected_canonical_prefix:{canonical_prefix}"
+        elif path.name in unselected_canonical:
+            category = "excluded_unselected_canonical"
+            reason = "outside_explicit_case_list"
         else:
             category = "quarantined_noncanonical"
             reason = "outside_explicit_allowlist"
@@ -470,6 +496,9 @@ def _discover_and_select(
         "selected_case_ids": [path.name for path in selected],
         "missing_allowlist_case_ids": missing_allowlist,
         "unexpected_canonical_case_ids": unexpected_canonical,
+        "unselected_canonical_case_ids": unselected_canonical,
+        "allow_unselected_canonical": allow_unselected_canonical,
+        "select_all_canonical": select_all_canonical,
         "invalid_case_list_entries": selection["invalid_entries"],
         "duplicate_case_ids": selection.get("duplicate_case_ids", []),
         "noncanonical_requested_case_ids": [
@@ -1169,11 +1198,13 @@ def _render_report(
         f"- selected IDs: `{', '.join(discovery['selected_case_ids'])}`",
         f"- missing allowlist IDs: `{', '.join(discovery['missing_allowlist_case_ids']) or 'none'}`",
         f"- unexpected canonical IDs: `{', '.join(discovery['unexpected_canonical_case_ids']) or 'none'}`",
+        f"- excluded unselected canonical IDs: `{', '.join(discovery.get('unselected_canonical_case_ids', [])) or 'none'}`",
         f"- noncanonical requested IDs: `{', '.join(discovery.get('noncanonical_requested_case_ids', [])) or 'none'}`",
         f"- invalid case-list entries: `{len(discovery.get('invalid_case_list_entries', []))}`",
         "",
         "## Pre-execution baseline",
         "",
+        f"- mode: `{baseline.get('baseline_mode', 'live')}`",
         f"- branch: `{baseline['git_branch']['stdout'].strip()}`",
         f"- pytest: `{baseline['pytest']['returncode']}`",
         f"- pip check: `{baseline['pip_check']['returncode']}`",
@@ -1288,8 +1319,13 @@ def run_analysis(
     case_list_path: Path | None,
     canonical_prefix: str | None,
     publish_partial: bool,
+    allow_unselected_canonical: bool = False,
+    select_all_canonical: bool = False,
     database_path: Path | None = None,
     cache_mode: str = "off",
+    baseline_mode: str = "live",
+    baseline_snapshot_path: Path | None = None,
+    baseline_max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
     profile: bool = False,
     performance_profiler: PerformanceProfiler | None = None,
 ) -> dict[str, Any]:
@@ -1307,7 +1343,21 @@ def run_analysis(
             raise FileExistsError(f"Refusing to reuse completed run directory: {run_dir}")
         layout.run_dir.mkdir(parents=True, exist_ok=True)
         public_report_dir.mkdir(parents=True, exist_ok=True)
-        baseline = capture_baseline(basetemp=REPO_ROOT / f".pytest_tmp_{_site_slug(site_code)}_baseline")
+        if baseline_mode == "live":
+            baseline = capture_baseline(
+                repository_root=REPO_ROOT,
+                basetemp=REPO_ROOT / f".pytest_tmp_{_site_slug(site_code)}_baseline",
+            )
+        elif baseline_mode == "reuse":
+            if baseline_snapshot_path is None:
+                raise ValueError("Reusable baseline mode requires an explicit snapshot path.")
+            baseline = load_reusable_baseline(
+                baseline_snapshot_path,
+                repository_root=REPO_ROOT,
+                max_age_hours=baseline_max_age_hours,
+            )
+        else:
+            raise ValueError(f"Unsupported baseline mode: {baseline_mode}")
         with _profile_artifact_write(performance_profiler, subtype="report generation"):
             _write_json(layout.reports_dir / "pre_execution_baseline.json", baseline)
 
@@ -1317,6 +1367,8 @@ def run_analysis(
         site_code=site_code,
         case_list_path=case_list_path,
         canonical_prefix=canonical_prefix,
+        allow_unselected_canonical=allow_unselected_canonical,
+        select_all_canonical=select_all_canonical,
         performance_profiler=performance_profiler,
     )
     selected_ids = discovery["selected_case_ids"]
@@ -1721,6 +1773,11 @@ def main(
     database_path = (
         Path(args.database).expanduser().resolve() if args.database else None
     )
+    baseline_snapshot_path = (
+        Path(args.baseline_snapshot).expanduser().resolve()
+        if args.baseline_snapshot
+        else None
+    )
     performance_profiler: PerformanceProfiler | None = None
     if args.profile:
         wall_started = _PROCESS_WALL_STARTED if process_wall_started is None else process_wall_started
@@ -1744,9 +1801,14 @@ def main(
             rollup_path=rollup_path,
             case_list_path=case_list_path,
             canonical_prefix=args.canonical_prefix,
+            allow_unselected_canonical=args.allow_unselected_canonical,
+            select_all_canonical=args.select_all_canonical,
             publish_partial=args.publish_partial,
             database_path=database_path,
             cache_mode=args.cache_mode,
+            baseline_mode=args.baseline_mode,
+            baseline_snapshot_path=baseline_snapshot_path,
+            baseline_max_age_hours=args.baseline_max_age_hours,
             profile=args.profile,
             performance_profiler=performance_profiler,
         )

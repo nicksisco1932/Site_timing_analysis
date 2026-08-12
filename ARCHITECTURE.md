@@ -143,6 +143,18 @@ embedding the implementation of each stage.
   hierarchy and direct `local.db` metadata, and reports canonical case parity.
   It uses remote listing and local filesystem metadata only; it does not call
   download, extraction, SQLite, staging, or source-write paths.
+- `onboarding.py` owns analysis-first Windows handoff validation. It resolves
+  one Teams-synced site, inventories canonical case/database candidates
+  read-only, validates all-versus-manifest selection, and writes versioned
+  non-secret profiles plus safely quoted collision-safe runners under the
+  user's Local AppData. It does not handle credentials, acquire data, or write
+  an analytical store.
+- `preflight_baseline.py` captures and verifies reusable repository gates.
+  Exact reuse requires a fresh snapshot with passing tests/checks and matching
+  repository path, Git commit plus dirty-content fingerprint, interpreter
+  path/version/binary hash, installed-dependency fingerprint, and test-command
+  contract. Live preflight remains the default; stale or mismatched reuse is a
+  hard failure.
 - `analytical_store.py` owns schema migrations and the explicit post-run
   `init`, `import-run`, `export-wide`, `export-long`, `compare-runs`,
   `summarize-runs`, and `list-runs` operations. Schema v1 stores parser
@@ -192,6 +204,9 @@ or normalization modules.
   path outside both the repository and imported run directories.
 - Pipeline cache mode defaults to off. Read-only reuse requires an explicit
   store path, and successful runs are seeded only by a later explicit import.
+- Pre-execution baseline mode defaults to live. Reuse requires an explicit
+  external snapshot and a positive freshness window; the run report retains
+  both the original gate evidence and exact-match validation details.
 - The sole operational store is
   `C:\Users\NicholasSisco\OneDrive - Profound Medical\Documents\10_Databases\timeline_analysis.sqlite`.
   It uses `DELETE` journaling and one workstation may write it. Other OneDrive-
@@ -201,9 +216,8 @@ or normalization modules.
 ## Deferred Work
 
 - Formal parity diffing against historical R outputs.
-- Verified reuse of an identical pre-execution test baseline; live validation
-  remains the default until snapshot invalidation and parity are proven.
-- Cache/source-hash and plot optimization only after post-preflight profiling
-  identifies a repeatable bottleneck.
+- Further plot or source-resolution optimization only after a separately
+  approved benchmark and byte-parity contract. Plot suppression remains
+  diagnostic-only while plots are required artifacts.
 - Splitting large compatibility/reporting modules after interface behavior is
   stabilized and covered by the test suite.
