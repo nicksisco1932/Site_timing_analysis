@@ -44,7 +44,7 @@ from .profiling import PerformanceProfiler
 from .state_machine import assign_states
 from .timing import compute_state_intervals
 from .timeline_cache import TimelineCacheReader
-from .timing_log import find_timing_log, parse_timing_log_csv
+from .timing_log import parse_timing_log, resolve_timing_log
 from .tff_adapter import apply_read_only_tff_adapter
 
 
@@ -351,7 +351,7 @@ def run_first_slice(
                     zip_member_index=config.zip_member_index,
                 )
 
-            timing_log_path = find_timing_log(
+            timing_log_path, timing_log_resolution_warnings = resolve_timing_log(
                 case_record.case_id,
                 resolved_site_root=site_root,
                 timing_log_dir_override=config.timing_log_dir,
@@ -407,6 +407,7 @@ def run_first_slice(
                     dict.fromkeys(
                         [
                             *source.warnings,
+                            *timing_log_resolution_warnings,
                             *list(metadata.get("enrichment_warnings", [])),
                         ]
                     )
@@ -569,9 +570,15 @@ def run_first_slice(
                 timing_log_synthetic_events = []
                 timing_mapping_warnings: list[str] = []
                 if timing_log_path is not None:
-                    timing_entries, timing_parse_warnings = parse_timing_log_csv(
+                    reference_datetime = (
+                        min(event.timestamp for event in normalized_events)
+                        if normalized_events
+                        else None
+                    )
+                    timing_entries, timing_parse_warnings = parse_timing_log(
                         timing_log_path,
                         case_record.case_id,
+                        reference_datetime=reference_datetime,
                     )
                     timing_log_synthetic_events, timing_mapping_warnings = derive_timing_log_synthetic_events(
                         timing_entries
@@ -631,6 +638,7 @@ def run_first_slice(
 
             case_warnings = [
                 *source.warnings,
+                *timing_log_resolution_warnings,
                 *(
                     [cache_lookup.reason]
                     if cache_lookup is not None and cache_lookup.status == "INVALID"

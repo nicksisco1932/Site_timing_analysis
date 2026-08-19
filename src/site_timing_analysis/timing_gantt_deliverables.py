@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import shutil
 from statistics import median
 from typing import Iterable
 
@@ -686,14 +687,16 @@ def build_run_deliverables(run: RunAudit, *, repo_root: Path) -> RunDeliverable:
     Output:
         Paths and validation checks for the generated final artifacts.
     Assumptions:
-        Existing reconstruction artifacts are read-only inputs. Only files under
-        ``final/`` are overwritten for idempotent reruns.
+        Existing reconstruction artifacts are read-only inputs. Files under
+        ``final/`` and the two published top-level timeline PNG copies are safe
+        to overwrite for idempotent reruns.
     """
     if run.status not in {"canonical", "retained"}:
         raise ValueError(f"Cannot build deliverables for run status {run.status!r}")
 
     final_dir = run.run_dir / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
+    publish_top_level_timeline_plots(run.run_dir)
 
     raw_segments, case_date_by_case = _load_interval_segments(
         run_dir=run.run_dir,
@@ -914,16 +917,58 @@ def _format_six(value: float) -> str:
 
 def _timeline_png_paths(run_dir: Path) -> dict[str, Path]:
     layout = output_layout(run_dir)
+    backend_layout = output_layout(run_dir / "Backend")
     return {
         "normalized_timeline": first_existing_path(
+            backend_layout.timeline_plots_dir / "normalized_timeline.png",
             layout.timeline_plots_dir / "normalized_timeline.png",
             run_dir / "plots" / "normalized_timeline.png",
         ),
         "original_hour_timeline": first_existing_path(
+            backend_layout.timeline_plots_dir / "original_hour_timeline.png",
             layout.timeline_plots_dir / "original_hour_timeline.png",
             run_dir / "plots" / "original_hour_timeline.png",
         ),
     }
+
+
+def publish_top_level_timeline_plots(run_dir: Path) -> dict[str, Path]:
+    """
+    Publish byte-identical timeline PNG copies beside a run's ``Report/``.
+
+    Input:
+        A timing-Gantt run root containing generated timeline plots in the
+        canonical backend or historical plot layout.
+    Output:
+        A mapping from plot type to the top-level published PNG path.
+    Assumptions:
+        Both timeline images are required publication artifacts. Missing source
+        plots or failed copies raise explicitly; backend sources are read-only.
+    """
+    resolved_run_dir = run_dir.expanduser().resolve()
+    sources = _timeline_png_paths(resolved_run_dir)
+    missing = [str(path) for path in sources.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Required timeline plot source(s) are missing: " + ", ".join(missing)
+        )
+
+    published: dict[str, Path] = {}
+    for plot_type, source in sources.items():
+        destination = resolved_run_dir / source.name
+        temporary = destination.with_name(f".{destination.name}.tmp")
+        try:
+            shutil.copy2(source, temporary)
+            temporary.replace(destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        if not destination.is_file() or destination.stat().st_size != source.stat().st_size:
+            raise OSError(
+                f"Timeline plot publication verification failed: {source} -> {destination}"
+            )
+        published[plot_type] = destination
+    return published
 
 
 def _write_timeline_plot_data(

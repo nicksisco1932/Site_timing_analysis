@@ -8,9 +8,9 @@ preflight, guided Windows handoff, and historical SQL-backed analysis.
 
 ## Current Objective
 
-The numbered repository TODO is complete through #8. Current work should focus
-on review and acceptance of the guided initializer and exact reusable preflight
-slice. No additional optimization is selected.
+The numbered repository TODO is complete through #10. Supplemental XLSX timing
+logs and top-level timing-Gantt plot publication are implemented and validated.
+No active TODO item is selected.
 
 ## Governing Files
 
@@ -50,6 +50,13 @@ session detail remains in `Legacy/SESSION_HISTORY.md`.
   only a fresh external snapshot with successful prior gates and exact Git
   commit/dirty contents, interpreter path/version/binary, dependencies, and
   test-command contract. Reuse evidence is preserved per run.
+- Optional timing logs now resolve exact `<case_id>.csv`/`<case_id>.xlsx`
+  matches. Explicit-directory misses are warning-only; XLSX clock values use
+  the earliest normalized event date, and ambiguous or malformed present files
+  fail explicitly at the case boundary.
+- Successful timing-Gantt publications expose byte-identical
+  `normalized_timeline.png` and `original_hour_timeline.png` copies at the run
+  root beside `Report/`, while retaining canonical backend sources.
 
 ## Durable Store and Governance
 
@@ -85,6 +92,11 @@ validation comparator.
 - Timing coverage remained above `99.986%`. The public CSV, 12 event CSVs, four
   interval CSVs, two plots, and reconciliation CSV were byte-identical across
   all six benchmark runs.
+- The supplemental timing-log audit found 1,138 XLSX workbooks, including seven
+  exact matches among 74 UCLA reference-run cases. All seven parsed without
+  timestamp warnings and each produced seven supported synthetic events.
+- Final TODO #9/#10 validation reported `236 passed`. The existing UCLA example
+  run's two new top-level PNGs matched their backend sources by SHA-256.
 
 ## Decisions and Deferred Work
 
@@ -95,13 +107,13 @@ validation comparator.
   Do not optimize it without a new explicit TODO and byte-parity criteria.
 - Acquisition-assisted onboarding may be considered later as a separate mode;
   do not add credential handling or automatic acquisition to the first slice.
-- Formal historical R parity, `.xlsx` timing-log enrichment, `local2.db`, and
-  eventual large-module splitting remain separate future work.
+- Formal historical R parity, `local2.db`, and eventual large-module splitting
+  remain separate future work.
 
 ## Resume Instructions
 
 1. Read the governing files in order.
-2. Treat TODO #1 through #8 as complete and preserve their interface contracts.
+2. Treat TODO #1 through #10 as complete and preserve their interface contracts.
 3. Review the current uncommitted implementation and validation evidence before
    adding new scope.
 4. Use explicit repository `.venv` executables for every Python command.

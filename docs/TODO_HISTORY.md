@@ -1,7 +1,8 @@
 # Timeline Analysis TODO History
 
-This archive preserves completion evidence for TODOs #1 through #5. The active
-work list remains in [`TODO.md`](../TODO.md).
+This aggregate archive preserves completion evidence for every finished item
+removed from the active work list. Fresh work remains in
+[`TODO.md`](../TODO.md).
 
 ## 1. Standard GitHub housekeeping — Completed 2026-08-10
 
@@ -129,7 +130,7 @@ the ASUI comparison contained 135 zero-difference rows. The canonical store
 remained integrity-clean, foreign-key-clean, pinned, and free of WAL/SHM files
 after OneDrive resumed.
 
-## 7. Guided handoff and pipeline initialization â€” Completed 2026-08-11
+## 7. Guided handoff and pipeline initialization — Completed 2026-08-11
 
 `scripts/initialize_timeline_analysis.ps1` validates the Windows/PowerShell
 runtime, plans or creates the repository `.venv`, and installs declared
@@ -153,7 +154,7 @@ acceptance exercised the generated runner twice and published hash-identical,
 one-row, 20-column CSVs in the base and `_2` collision-safe run directories.
 Acquisition and analytical-store writes remained outside onboarding.
 
-## 8. Pipeline profiling and optimization â€” Completed 2026-08-11
+## 8. Pipeline profiling and optimization — Completed 2026-08-11
 
 `scripts/preflight_baseline.py` captures reusable live gate evidence at an
 explicit path outside Git. `scripts/run_timeline_analysis.py` retains live
@@ -174,3 +175,36 @@ gain came primarily from avoiding repeated test subprocess/I/O work. Timing
 coverage remained above `99.986%`; all 20 required public, event, interval,
 plot, and reconciliation artifacts were byte-identical. Detailed evidence is
 in `docs/PREFLIGHT_BASELINE_BENCHMARK_2026-08-11.md`.
+
+## 9. Supplemental XLSX timing-log integration — Completed 2026-08-17
+
+The optional timing-log boundary now resolves exact `<case_id>.csv` or
+`<case_id>.xlsx` filenames. Missing files in an explicitly selected timing-log
+directory produce case and run-manifest warnings without failing processing;
+multiple exact supported files remain an explicit ambiguity failure. XLSX files
+are loaded but never saved, require one unique `EVENT`/`START`/`END` header, and
+convert Excel clock values to datetimes using the earliest normalized case-event
+date. Overnight rollovers greater than 12 hours are reported.
+
+The 2026-08-17 source audit found 1,138 XLSX files: 1,119 canonical case-like
+filenames and 19 noncanonical filenames. The 74-case UCLA reference run had 7
+exact workbook matches, 67 cases without a workbook, and 1 workbook without a
+case in that run, proving that the sources are not one-to-one. All seven matched
+UCLA workbooks parsed 23 timing rows each, produced the same seven supported
+synthetic event types, and had zero timestamp parse warnings. The full schema,
+matching contract, and representative evidence are recorded in
+`docs/TIMING_LOG_XLSX.md`.
+
+## 10. Top-level timing Gantt plot publication — Completed 2026-08-17
+
+Successful validated runs and standardized deliverable builds now require both
+timeline plot sources and publish byte-identical copies of
+`normalized_timeline.png` and `original_hour_timeline.png` at the run root beside
+`Report/`. Canonical backend sources under `Backend/plots/timelines/` remain
+unchanged. Missing sources or copy-verification failures raise explicitly before
+the validated public CSV is written.
+
+The existing `2026.08.11_UCLA_008_timing_Gantt` example was updated in place.
+Both top-level files matched their backend sources by SHA-256. Focused XLSX and
+deliverable regression reported 23 passing tests; the final repository suite
+reported 236 passing tests.

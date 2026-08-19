@@ -16,7 +16,7 @@ The current Python codebase contains two related workflow surfaces:
 
 - A staged timing pipeline in `src/site_timing_analysis/` that discovers case
   data, reads `local.db` audit-log databases, normalizes events, enriches events
-  from Sessions rows and optional timing-log CSVs, reconstructs operational
+  from Sessions rows and optional timing-log CSV/XLSX files, reconstructs operational
   states, computes state intervals, and generates timeline plots.
 - Legacy-compatible `tulsa_*` scripts and root-level wrappers that preserve the
   older script-oriented workflow for collecting audit logs, applying a state
@@ -134,7 +134,10 @@ folder does not resolve as `<root>\<site>`.
 
 Common optional arguments:
 
-- `--timing-log-dir`: directory containing optional `<case_id>.csv` timing logs.
+- `--timing-log-dir`: directory containing optional exact `<case_id>.csv` or
+  `<case_id>.xlsx` timing logs. Missing case files are recorded as warnings and
+  do not stop processing. See
+  [`docs/TIMING_LOG_XLSX.md`](docs/TIMING_LOG_XLSX.md).
 - `--allow-ambiguous-db`, `--db-candidate-index`, `--zip-member-index`:
   deterministic controls for ambiguous database discovery.
 - `--diagnostics` and `--diagnostics-file`: write an operator-facing diagnostics
@@ -152,6 +155,7 @@ wide CSV row per case with the operational-state columns:
   --site "Stanford_064" `
   --site-root "C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - Stanford_064" `
   --canonical-prefix "064_" `
+  --timing-log-dir "C:\Users\NicholasSisco\Profound Medical\Clinical Science Team - Timing Data\TimingLogs" `
   --run-dir ".\outputs\timing_gantt\2026.08.10_Stanford_064_timing_Gantt"
 ```
 
@@ -183,8 +187,13 @@ published layout is intentionally compact:
 ```text
 <run-dir>/
 |-- Backend/   # manifests, events, intervals, plots, diagnostics, staging
-`-- Report/    # <site>_timeline_analysis.csv and validation report
+|-- Report/    # <site>_timeline_analysis.csv and validation report
+|-- normalized_timeline.png
+`-- original_hour_timeline.png
 ```
+
+The two top-level PNGs are byte-identical published copies of the required
+sources under `Backend/plots/timelines/`; the backend originals remain in place.
 
 For ASUI_122, omitting `--case-list` uses the built-in nine-case allowlist. The
 existing ASUI roll-up can be supplied with `--rollup` for reconciliation.
@@ -568,7 +577,8 @@ include:
   inside archives discovered by the DB source resolver.
 - Required `AuditLogRecords` table data.
 - Optional `Sessions` table data used for synthetic timing-event enrichment.
-- Optional timing-log CSV files, normally named `<case_id>.csv`.
+- Optional timing-log CSV or XLSX files named exactly `<case_id>.csv` or
+  `<case_id>.xlsx`.
 - Site and case identifiers inferred from the site folder/case folder structure
   and/or manifest rows.
 

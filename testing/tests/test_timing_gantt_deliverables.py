@@ -15,6 +15,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pytest
+
 from site_timing_analysis.timing_gantt_deliverables import (
     CANONICAL_RUN_NAME,
     RunAudit,
@@ -22,6 +24,7 @@ from site_timing_analysis.timing_gantt_deliverables import (
     balanced_group_sizes,
     build_all_deliverables,
     build_run_deliverables,
+    publish_top_level_timeline_plots,
 )
 
 
@@ -95,6 +98,18 @@ def _write_interval_file(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_timeline_plots(run_dir: Path) -> dict[str, bytes]:
+    plots_dir = run_dir / "Backend" / "plots" / "timelines"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    payloads = {
+        "normalized_timeline.png": b"normalized-timeline-png",
+        "original_hour_timeline.png": b"original-hour-timeline-png",
+    }
+    for name, payload in payloads.items():
+        (plots_dir / name).write_bytes(payload)
+    return payloads
 
 
 def _write_fragmented_interval_file(run_dir: Path) -> None:
@@ -208,6 +223,7 @@ def test_assign_chronology_groups_uses_case_dates() -> None:
 
 def test_build_run_deliverables_writes_final_tables_and_plots(tmp_path: Path) -> None:
     run_dir = tmp_path / "2026.03.20_UCSD_109_timing_Gantt"
+    plot_payloads = _write_timeline_plots(run_dir)
     for index in range(1, 6):
         _write_interval_file(
             run_dir,
@@ -246,6 +262,13 @@ def test_build_run_deliverables_writes_final_tables_and_plots(tmp_path: Path) ->
     assert result.original_hour_timeline_state_summary_long_csv.exists()
     assert result.normalized_timeline_state_summary_wide_csv.exists()
     assert result.original_hour_timeline_state_summary_wide_csv.exists()
+    assert (run_dir / "normalized_timeline.png").read_bytes() == plot_payloads["normalized_timeline.png"]
+    assert (run_dir / "original_hour_timeline.png").read_bytes() == plot_payloads[
+        "original_hour_timeline.png"
+    ]
+    assert (
+        run_dir / "Backend" / "plots" / "timelines" / "normalized_timeline.png"
+    ).read_bytes() == plot_payloads["normalized_timeline.png"]
 
     with result.operational_state_summary_by_case_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
@@ -289,6 +312,7 @@ def test_build_run_deliverables_writes_final_tables_and_plots(tmp_path: Path) ->
 
 def test_timeline_state_tables_coalesce_visual_runs_and_sum_from_state_runs(tmp_path: Path) -> None:
     run_dir = tmp_path / "2026.03.19_ASUI_122_timing_Gantt"
+    _write_timeline_plots(run_dir)
     _write_fragmented_interval_file(run_dir)
     audit = RunAudit(
         run_name="2026.03.19_ASUI_122_timing_Gantt",
@@ -361,6 +385,7 @@ def test_build_all_deliverables_marks_superseded_ucsd(tmp_path: Path) -> None:
     superseded = timing_root / "2026.03.19_UCSD_109_timing_Gantt"
     retained = timing_root / "2026.03.19_ASUI_122_timing_Gantt"
     for run_dir, site_prefix in [(canonical, "109"), (superseded, "109"), (retained, "122")]:
+        _write_timeline_plots(run_dir)
         for index in range(1, 4):
             _write_interval_file(
                 run_dir,
@@ -385,3 +410,13 @@ def test_build_all_deliverables_marks_superseded_ucsd(tmp_path: Path) -> None:
     assert (canonical / "final" / "plot_data" / "normalized_timeline_state_summary_wide.csv").exists()
     assert (retained / "final" / "plot_data" / "original_hour_timeline_state_runs.csv").exists()
     assert not (superseded / "final" / "plot_data").exists()
+
+
+def test_publish_top_level_timeline_plots_requires_both_sources(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    plots_dir = run_dir / "Backend" / "plots" / "timelines"
+    plots_dir.mkdir(parents=True)
+    (plots_dir / "normalized_timeline.png").write_bytes(b"normalized")
+
+    with pytest.raises(FileNotFoundError, match="original_hour_timeline.png"):
+        publish_top_level_timeline_plots(run_dir)

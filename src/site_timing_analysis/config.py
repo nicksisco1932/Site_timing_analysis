@@ -191,7 +191,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timing-log-dir",
         default=None,
-        help="Optional directory containing <case_id>.csv timing logs. "
+        help="Optional directory containing exact <case_id>.csv or <case_id>.xlsx timing logs. "
         "Default: <resolved_site_root>/TimingLogs",
     )
     parser.add_argument(

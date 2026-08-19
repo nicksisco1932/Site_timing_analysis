@@ -105,7 +105,11 @@ embedding the implementation of each stage.
   explicit ambiguity handling.
 - `ingestion.py` reads `AuditLogRecords` and optional `Sessions` data read-only.
 - `normalization.py`, `enrichment.py`, and `timing_log.py` produce immutable
-  derived event streams from raw inputs.
+  derived event streams from raw inputs. Supplemental timing logs resolve only
+  by exact `<case_id>.csv`/`<case_id>.xlsx` filename; missing explicit-directory
+  matches are warning-only, while ambiguity or malformed present files fail at
+  the case boundary. XLSX clock values use the normalized event date as their
+  explicit treatment-date anchor.
 - `state_machine.py` assigns workflow states and records cleanup attribution.
 - `timing.py` computes state intervals, rebasing, truncation, and quality flags.
 - `manifest.py` writes the canonical run, event, and interval artifacts.
@@ -198,6 +202,9 @@ or normalization modules.
   source control unless explicitly approved.
 - Derived artifacts are written beneath the selected run directory using the
   canonical layout in `output_layout.py`.
+- Validated timing-Gantt publications retain canonical plot sources under
+  `Backend/plots/timelines/` and publish byte-identical copies of both required
+  timeline PNGs at the run root beside `Report/`.
 - Case/site identifiers and provenance fields must remain attributable through
   every downstream export.
 - Clinical-derived analytical stores and their exports must use an explicit

@@ -16,10 +16,11 @@ import csv
 import json
 import sqlite3
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
 
 from site_timing_analysis.enrichment import (
     derive_session_synthetic_events,
@@ -30,7 +31,12 @@ from site_timing_analysis.first_slice_cli import run_first_slice
 from site_timing_analysis.manifest import write_enriched_events_csv
 from site_timing_analysis.output_layout import output_layout
 from site_timing_analysis.models import NormalizedAuditEvent, SyntheticEvent, TimingLogEntry
-from site_timing_analysis.timing_log import find_timing_log, parse_timing_log_csv
+from site_timing_analysis.timing_log import (
+    find_timing_log,
+    parse_timing_log,
+    parse_timing_log_csv,
+    resolve_timing_log,
+)
 from site_timing_analysis.errors import TimingLogParseError
 
 
@@ -175,6 +181,214 @@ def test_timing_log_absent_behavior(tmp_path: Path) -> None:
     entries, warnings = parse_timing_log_csv(missing_file, "064_01-001")
     assert entries == []
     assert warnings == []
+
+    explicit_dir = tmp_path / "shared_timing_logs"
+    explicit_dir.mkdir()
+    resolved, resolution_warnings = resolve_timing_log(
+        "064_01-001",
+        site_root,
+        timing_log_dir_override=explicit_dir,
+    )
+    assert resolved is None
+    assert len(resolution_warnings) == 1
+    assert "timing_log_missing" in resolution_warnings[0]
+
+
+def test_timing_log_xlsx_parses_clock_values_with_case_date(tmp_path: Path) -> None:
+    timing_path = tmp_path / "008_01-208.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "TimingLog"
+    worksheet.append(["TREATMENT TIMING LOG"])
+    worksheet.append([None, None, None, "EVENT", "START", "END"])
+    worksheet.append(
+        [None, None, None, "Anesthesia Team starts to prepapre the patient ", time(8, 16), None]
+    )
+    worksheet.append([None, None, None, "Patient is ready for Urology team", None, time(8, 25)])
+    worksheet.append([None, None, None, "Devices Insertion", time(8, 28), time(8, 44)])
+    worksheet.append(
+        [
+            None,
+            None,
+            None,
+            "Initial Device Imaging (From first until last survey)",
+            time(8, 51),
+            None,
+        ]
+    )
+    worksheet.append(
+        [
+            None,
+            None,
+            None,
+            "Patient Transfer from MRI Bed to Recovery room",
+            time(12, 18),
+            time(12, 19),
+        ]
+    )
+    workbook.save(timing_path)
+    workbook.close()
+
+    entries, parse_warnings = parse_timing_log(
+        timing_path,
+        "008_01-208",
+        reference_datetime=datetime(2023, 11, 22, 8, 0),
+    )
+    events, mapping_warnings = derive_timing_log_synthetic_events(entries)
+
+    assert parse_warnings == []
+    assert mapping_warnings == []
+    assert len(entries) == 5
+    assert [event.event_type for event in events] == [
+        "AnesthesiaStart",
+        "Ready4Urology",
+        "DeviceInsertionBegins",
+        "DeviceInsertionEnds",
+        "InitialImaging",
+        "PatientTransferBegins",
+        "PatientTransferEnds",
+    ]
+    assert all(event.timestamp.date().isoformat() == "2023-11-22" for event in events)
+    assert events[0].timestamp.time() == time(8, 16)
+    assert events[-1].timestamp.time() == time(12, 19)
+
+
+def test_timing_log_resolution_rejects_csv_xlsx_ambiguity(tmp_path: Path) -> None:
+    timing_dir = tmp_path / "TimingLogs"
+    timing_dir.mkdir()
+    (timing_dir / "064_01-001.csv").write_text("Events,TimeSTART,TimeEND\n", encoding="utf-8")
+    (timing_dir / "064_01-001.xlsx").write_bytes(b"not-read-during-resolution")
+
+    with pytest.raises(TimingLogParseError, match="Ambiguous timing-log match"):
+        resolve_timing_log(
+            "064_01-001",
+            tmp_path,
+            timing_log_dir_override=timing_dir,
+        )
+
+
+def test_malformed_present_timing_log_xlsx_fails_loudly(tmp_path: Path) -> None:
+    timing_path = tmp_path / "064_01-001.xlsx"
+    timing_path.write_bytes(b"not-an-xlsx-package")
+
+    with pytest.raises(TimingLogParseError, match="Failed to read timing-log XLSX"):
+        parse_timing_log(
+            timing_path,
+            "064_01-001",
+            reference_datetime=datetime(2025, 1, 1, 8, 0),
+        )
+
+
+def test_cli_records_missing_explicit_timing_log_without_failing_case(tmp_path: Path) -> None:
+    root_dir = tmp_path / "root"
+    site_dir = root_dir / "Stanford_064"
+    case_dir = site_dir / "064_01-001"
+    case_dir.mkdir(parents=True)
+    _create_sqlite(
+        case_dir / "local.db",
+        [
+            "CREATE TABLE AuditLogRecords ("
+            "Id INTEGER PRIMARY KEY, TimeStamp TEXT, AuditRecordBase_Type TEXT, "
+            "SegmentId TEXT, EventKind INTEGER)",
+            "INSERT INTO AuditLogRecords (TimeStamp, AuditRecordBase_Type, SegmentId, EventKind) "
+            "VALUES ('2025-01-01 12:00:00', 'SetupWorkflowRecord', 'SEG-1', 1)",
+        ],
+    )
+    timing_dir = tmp_path / "shared_timing_logs"
+    timing_dir.mkdir()
+
+    manifest = run_first_slice(
+        [
+            "--site",
+            "Stanford_064",
+            "--years",
+            "2025",
+            "--root",
+            str(root_dir),
+            "--output",
+            str(tmp_path / "out"),
+            "--timing-log-dir",
+            str(timing_dir),
+        ]
+    )
+
+    processed = [row for row in manifest.case_results if row.get("status") == "processed"]
+    assert len(processed) == 1
+    assert processed[0]["timing_log_path"] is None
+    assert any("timing_log_missing" in warning for warning in processed[0]["enrichment_warnings"])
+    assert any("timing_log_missing" in warning for warning in manifest.warnings)
+
+
+def test_cli_integrates_exact_xlsx_timing_log(tmp_path: Path) -> None:
+    root_dir = tmp_path / "root"
+    site_dir = root_dir / "Stanford_064"
+    case_dir = site_dir / "064_01-001"
+    case_dir.mkdir(parents=True)
+    _create_sqlite(
+        case_dir / "local.db",
+        [
+            "CREATE TABLE AuditLogRecords ("
+            "Id INTEGER PRIMARY KEY, TimeStamp TEXT, AuditRecordBase_Type TEXT, "
+            "SegmentId TEXT, EventKind INTEGER)",
+            "INSERT INTO AuditLogRecords (TimeStamp, AuditRecordBase_Type, SegmentId, EventKind) "
+            "VALUES ('2025-01-01 12:00:00', 'SetupWorkflowRecord', 'SEG-1', 1)",
+        ],
+    )
+    timing_dir = tmp_path / "shared_timing_logs"
+    timing_dir.mkdir()
+    timing_path = timing_dir / "064_01-001.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "TimingLog"
+    worksheet.append([None, None, None, "EVENT", "START", "END"])
+    worksheet.append([None, None, None, "Devices Insertion", time(11, 0), time(11, 15)])
+    worksheet.append(
+        [
+            None,
+            None,
+            None,
+            "Initial Device Imaging (From first until last survey)",
+            time(11, 20),
+            None,
+        ]
+    )
+    workbook.save(timing_path)
+    workbook.close()
+
+    output_dir = tmp_path / "out"
+    manifest = run_first_slice(
+        [
+            "--site",
+            "Stanford_064",
+            "--years",
+            "2025",
+            "--root",
+            str(root_dir),
+            "--output",
+            str(output_dir),
+            "--timing-log-dir",
+            str(timing_dir),
+        ]
+    )
+
+    processed = [row for row in manifest.case_results if row.get("status") == "processed"]
+    assert len(processed) == 1
+    case_result = processed[0]
+    assert case_result["timing_log_path"] == str(timing_path.resolve())
+    assert case_result["timing_log_entry_count"] == 2
+    assert case_result["timing_log_synthetic_count"] == 3
+    assert not any("timing_log_missing" in warning for warning in case_result["enrichment_warnings"])
+
+    enriched_path = output_layout(output_dir).enriched_events_dir / "064_01-001_enriched_events.csv"
+    with enriched_path.open("r", encoding="utf-8", newline="") as handle:
+        enriched_rows = list(csv.DictReader(handle))
+    xlsx_rows = [row for row in enriched_rows if row["source"] == "timing_log"]
+    assert [row["event_type"] for row in xlsx_rows] == [
+        "DeviceInsertionBegins",
+        "DeviceInsertionEnds",
+        "InitialImaging",
+    ]
+    assert all(row["timestamp"].startswith("2025-01-01T") for row in xlsx_rows)
 
 
 def test_timing_log_parse_explicit_columns_and_mapping() -> None:

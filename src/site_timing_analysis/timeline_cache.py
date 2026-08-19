@@ -43,6 +43,7 @@ from .models import (
     StateInterval,
     StateLabeledEvent,
 )
+from .timing_log import timing_log_source_type
 
 
 @dataclass(slots=True)
@@ -286,7 +287,7 @@ class TimelineCacheReader:
                 _present_analysis_input(
                     role="timing_log",
                     path=timing_log_path,
-                    source_type="timing_log_csv",
+                    source_type=timing_log_source_type(timing_log_path),
                 )
             )
         input_fingerprint = analysis_input_fingerprint(inputs)

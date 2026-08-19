@@ -53,6 +53,7 @@ from site_timing_analysis.timing_gantt_deliverables import (  # noqa: E402
     PHASE_ORDER,
     PHASE_STATE_MAP,
     _state_to_phase,
+    publish_top_level_timeline_plots,
 )
 
 
@@ -121,6 +122,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-dir", default=None, help="Run output directory. Defaults to dated site output.")
     parser.add_argument("--rollup", default=None, help="Optional five-phase roll-up comparator CSV.")
     parser.add_argument("--canonical-prefix", default=None, help="Canonical folder prefix, e.g. 064_.")
+    parser.add_argument(
+        "--timing-log-dir",
+        default=None,
+        help=(
+            "Optional directory containing exact <case_id>.csv or <case_id>.xlsx timing logs. "
+            "Missing case workbooks are reported and do not stop processing."
+        ),
+    )
     parser.add_argument(
         "--allow-unselected-canonical",
         action="store_true",
@@ -1319,6 +1328,7 @@ def run_analysis(
     case_list_path: Path | None,
     canonical_prefix: str | None,
     publish_partial: bool,
+    timing_log_dir: Path | None = None,
     allow_unselected_canonical: bool = False,
     select_all_canonical: bool = False,
     database_path: Path | None = None,
@@ -1444,6 +1454,11 @@ def run_analysis(
                 "--diagnostics",
                 "--diagnostics-file",
                 str(diagnostics_path),
+                *(
+                    ["--timing-log-dir", str(timing_log_dir)]
+                    if timing_log_dir is not None
+                    else []
+                ),
             ],
             performance_profiler=performance_profiler,
             cache_reader=cache_reader,
@@ -1684,7 +1699,9 @@ def run_analysis(
         status = "PUBLISHED"
 
     final_csv = public_report_dir / f"{_site_slug(site_code)}_timeline_analysis.csv"
+    top_level_timeline_plots: dict[str, Path] = {}
     if status in {"PUBLISHED", "PARTIAL_PUBLISHED"}:
+        top_level_timeline_plots = publish_top_level_timeline_plots(run_dir)
         with _profile_artifact_write(performance_profiler, subtype="CSV export"):
             _write_csv(final_csv, _state_headers(), staged_rows)
 
@@ -1721,6 +1738,9 @@ def run_analysis(
                     "final_csv": str(final_csv) if final_csv.exists() else None,
                     "staged_csv": str(staged_csv) if staged_csv.exists() else None,
                     "report": str(report_path),
+                    "top_level_timeline_plots": {
+                        key: str(path) for key, path in top_level_timeline_plots.items()
+                    },
                     "cache": cache_summary,
                 },
             )
@@ -1753,6 +1773,7 @@ def run_analysis(
         "final_csv": final_csv if final_csv.exists() else None,
         "staged_csv": staged_csv if staged_csv.exists() else None,
         "report": report_path,
+        "top_level_timeline_plots": top_level_timeline_plots,
         "performance": performance_paths,
         "cache": cache_summary,
     }
@@ -1770,6 +1791,9 @@ def main(
     run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else _default_run_dir(site_code).resolve()
     rollup_path = Path(args.rollup).expanduser().resolve() if args.rollup else _default_rollup(site_code)
     case_list_path = Path(args.case_list).expanduser().resolve() if args.case_list else None
+    timing_log_dir = (
+        Path(args.timing_log_dir).expanduser().resolve() if args.timing_log_dir else None
+    )
     database_path = (
         Path(args.database).expanduser().resolve() if args.database else None
     )
@@ -1804,6 +1828,7 @@ def main(
             allow_unselected_canonical=args.allow_unselected_canonical,
             select_all_canonical=args.select_all_canonical,
             publish_partial=args.publish_partial,
+            timing_log_dir=timing_log_dir,
             database_path=database_path,
             cache_mode=args.cache_mode,
             baseline_mode=args.baseline_mode,

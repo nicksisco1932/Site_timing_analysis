@@ -41,6 +41,7 @@ import subprocess
 from typing import Any, Iterable
 
 from .timing_gantt_deliverables import PHASE_ORDER, PHASE_STATE_MAP
+from .timing_log import timing_log_source_type
 
 
 SCHEMA_VERSION = 2
@@ -1305,7 +1306,7 @@ def prepare_run_import(
                 _present_analysis_input(
                     role="timing_log",
                     path=Path(str(timing_log_value)),
-                    source_type="timing_log_csv",
+                    source_type=timing_log_source_type(Path(str(timing_log_value))),
                 )
             )
         input_fingerprint = analysis_input_fingerprint(analysis_inputs)
